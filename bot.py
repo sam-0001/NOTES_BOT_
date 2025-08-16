@@ -29,10 +29,6 @@ from googleapiclient.http import MediaIoBaseDownload
 from flask import Flask, request
 
 # --- Configuration and Setup ---
-# Use a data directory that works with Render's persistent disk
-DATA_DIR = Path(os.getenv("RENDER_DISK_PATH", "."))
-DATA_DIR.mkdir(parents=True, exist_ok=True) # Ensure the directory exists
-
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
@@ -59,68 +55,8 @@ def escape_markdown(text: str) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-# --- Database Management ---
-DB_FILE = DATA_DIR / "file_cache.db"
-
-def setup_database():
-    """Initializes the SQLite database for caching."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS assignment_cache (
-            id INTEGER PRIMARY KEY, year TEXT, branch TEXT, subject TEXT, assignment_number INTEGER,
-            telegram_file_id TEXT, UNIQUE(year, branch, subject, assignment_number)
-        )""")
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS note_cache (
-            id INTEGER PRIMARY KEY, year TEXT, branch TEXT, subject TEXT, note_number INTEGER,
-            telegram_file_id TEXT, UNIQUE(year, branch, subject, note_number)
-        )""")
-    conn.commit()
-    conn.close()
-    logger.info(f"Database initialized at: {DB_FILE}")
-
-def get_cached_assignment_id(year, branch, subject, assignment_number):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT telegram_file_id FROM assignment_cache WHERE year = ? AND branch = ? AND subject = ? AND assignment_number = ?",
-        (year, branch.upper(), subject.upper(), assignment_number)
-    )
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def cache_assignment_id(year, branch, subject, assignment_number, file_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO assignment_cache (year, branch, subject, assignment_number, telegram_file_id) VALUES (?, ?, ?, ?, ?)",
-        (year, branch.upper(), subject.upper(), assignment_number, file_id)
-    )
-    conn.commit()
-    conn.close()
-
-def get_cached_note_id(year, branch, subject, note_number):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT telegram_file_id FROM note_cache WHERE year = ? AND branch = ? AND subject = ? AND note_number = ?",
-        (year, branch.upper(), subject.upper(), note_number)
-    )
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def cache_note_id(year, branch, subject, note_number, file_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT OR REPLACE INTO note_cache (year, branch, subject, note_number, telegram_file_id) VALUES (?, ?, ?, ?, ?)",
-        (year, branch.upper(), subject.upper(), note_number, file_id)
-    )
-    conn.commit()
-    conn.close()
+# --- Database Management (REMOVED) ---
+# All database and caching functions have been removed to run on Render's free tier.
 
 # --- Google Drive API Logic ---
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -327,15 +263,7 @@ async def get_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
 
-    cached_file_id = get_cached_assignment_id(year, branch, subject, assignment_number)
-    if cached_file_id:
-        try:
-            await context.bot.send_document(chat_id=update.effective_chat.id, document=cached_file_id)
-            await placeholder_message.delete()
-            return
-        except TelegramError as e:
-            logger.warning(f"Failed to send cached file {cached_file_id}, re-downloading. Error: {e}")
-
+    # Caching logic removed
     assignments_folder_id = await resolve_path_to_id([year, branch, subject, "assignments"])
     if not assignments_folder_id:
         await placeholder_message.edit_text("❌ Assignment folder not found\\.", parse_mode='MarkdownV2')
@@ -354,8 +282,7 @@ async def get_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     file_content = await download_file_from_drive(file_id)
     if file_content:
-        sent_message = await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
-        cache_assignment_id(year, branch, subject, assignment_number, sent_message.document.file_id)
+        await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
         await placeholder_message.delete()
     else:
         await placeholder_message.edit_text("⚠️ Error downloading the file from Google Drive\\.", parse_mode='MarkdownV2')
@@ -398,15 +325,7 @@ async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
 
-    cached_file_id = get_cached_note_id(year, branch, subject, note_number)
-    if cached_file_id:
-        try:
-            await context.bot.send_document(chat_id=update.effective_chat.id, document=cached_file_id)
-            await placeholder_message.delete()
-            return
-        except TelegramError as e:
-            logger.warning(f"Failed to send cached file {cached_file_id}, re-downloading. Error: {e}")
-
+    # Caching logic removed
     notes_folder_id = await resolve_path_to_id([year, branch, subject, "Notes"])
     if not notes_folder_id:
         await placeholder_message.edit_text("❌ Notes folder not found\\.", parse_mode='MarkdownV2')
@@ -426,8 +345,7 @@ async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     file_content = await download_file_from_drive(file_id)
     if file_content:
-        sent_message = await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
-        cache_note_id(year, branch, subject, note_number, sent_message.document.file_id)
+        await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
         await placeholder_message.delete()
     else:
         await placeholder_message.edit_text("⚠️ Error downloading the file from Google Drive\\.", parse_mode='MarkdownV2')
@@ -460,7 +378,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 if not get_drive_service():
     logger.critical("Could not initialize Google Drive service. Exiting.")
     exit()
-setup_database()
+# setup_database() call removed
 
 application = (
     Application.builder()
@@ -517,7 +435,6 @@ async def setup_bot():
     
     async with application:
         await application.bot.set_webhook(url=webhook_url)
-        # MODIFIED: This log message no longer prints the secret token.
         logger.info(f"Application started. Webhook set to https://{RENDER_EXTERNAL_HOSTNAME}/<BOT_TOKEN>")
 
 if __name__ == "__main__":
