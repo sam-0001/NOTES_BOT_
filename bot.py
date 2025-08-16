@@ -412,38 +412,20 @@ conv_handler = ConversationHandler(
 application.add_handler(conv_handler)
 application.add_error_handler(error_handler)
 
-# NEW: Create the Flask app first
 flask_app = Flask(__name__)
-# NEW: Wrap the Flask app in the ASGI adapter. This is what Gunicorn will run.
 app = WsgiToAsgi(flask_app)
 
 @flask_app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 async def webhook() -> str:
     """This endpoint listens for updates from Telegram."""
     try:
-        update = Update.de_json(await request.get_json(), application.bot)
+        # CORRECTED: Removed 'await' from the following line
+        update = Update.de_json(request.get_json(), application.bot)
         await application.process_update(update)
         return "OK"
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
         return "Error", 500
 
-async def setup_bot():
-    """Sets the webhook."""
-    if not RENDER_EXTERNAL_HOSTNAME:
-        logger.warning("RENDER_EXTERNAL_HOSTNAME is not set. Cannot set webhook.")
-        return
-
-    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_BOT_TOKEN}"
-    
-    async with application:
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info(f"Application started. Webhook set to https://{RENDER_EXTERNAL_HOSTNAME}/<BOT_TOKEN>")
-
-if __name__ == "__main__":
-    # This block runs when the application starts.
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        loop.create_task(setup_bot())
-    else:
-        loop.run_until_complete(setup_bot())
+# The setup_bot() function and if __name__ == "__main__" block have been removed.
+# The webhook must be set manually using the separate setup_webhook.py script.
