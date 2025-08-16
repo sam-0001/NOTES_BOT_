@@ -1,21 +1,20 @@
 import os
 import logging
-import sqlite3
 import re
 import io
 import json
-from pathlib import Path
 import asyncio
 
 # Third-party libraries
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 from telegram.error import TimedOut, TelegramError
@@ -25,7 +24,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
-# Webhook-related imports
+# Webhook-related imports for deployment
 from flask import Flask, request
 from asgiref.wsgi import WsgiToAsgi
 
@@ -80,11 +79,13 @@ def get_drive_service():
 
 # --- Google Drive Helper Functions ---
 async def find_item_id_in_parent(name, parent_id, is_folder=True):
+    """Finds a file or folder by name within a parent folder."""
     service = get_drive_service()
     if not service: return None
     mime_type_query = "mimeType = 'application/vnd.google-apps.folder'" if is_folder else "mimeType != 'application/vnd.google-apps.folder'"
     try:
-        query = f"name = '{name}' and '{parent_id}' in parents and trashed = false and {mime_type_query}"
+        # Use case-insensitive search for folder names
+        query = f"lower(name) = '{name.lower()}' and '{parent_id}' in parents and trashed = false and {mime_type_query}"
         response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
         files = response.get('files', [])
         return files[0].get('id') if files else None
@@ -93,6 +94,7 @@ async def find_item_id_in_parent(name, parent_id, is_folder=True):
         return None
 
 async def list_folders_in_parent(parent_id):
+    """Lists all folders within a parent folder."""
     service = get_drive_service()
     if not service: return []
     try:
@@ -103,7 +105,20 @@ async def list_folders_in_parent(parent_id):
         logger.error(f"API Error listing folders: {error}")
         return []
 
+async def list_files_in_parent(parent_id):
+    """Lists all files (not folders) within a parent folder, returning their name and ID."""
+    service = get_drive_service()
+    if not service: return []
+    try:
+        query = f"'{parent_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
+        response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        return [{'name': item['name'], 'id': item['id']} for item in response.get('files', [])]
+    except HttpError as error:
+        logger.error(f"API Error listing files: {error}")
+        return []
+
 async def download_file_from_drive(file_id):
+    """Downloads a file's content from Google Drive by its ID."""
     service = get_drive_service()
     try:
         request = service.files().get_media(fileId=file_id)
@@ -119,6 +134,7 @@ async def download_file_from_drive(file_id):
         return None
 
 async def resolve_path_to_id(path_parts):
+    """Resolves a path like ['1st_Year', 'CSE'] to a Google Drive folder ID."""
     current_id = GOOGLE_DRIVE_ROOT_FOLDER_ID
     for part in path_parts:
         next_id = await find_item_id_in_parent(part, current_id, is_folder=True)
@@ -130,12 +146,14 @@ async def resolve_path_to_id(path_parts):
 
 # --- Command Handlers ---
 async def check_user_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Checks if the user has completed the initial /start setup."""
     if 'year' not in context.user_data:
         await update.message.reply_text("Welcome\\! Please start by using the /start command to set your year and name\\.", parse_mode='MarkdownV2')
         return False
     return True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the conversation to set up the user's year and name."""
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "👋 Welcome\\! Let's get you set up\\.\n\n"
@@ -146,6 +164,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SELECT_YEAR
 
 async def select_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the year selection and asks for the user's name."""
     year_display = update.message.text
     year_folder_name = year_display.replace(" ", "_")
     context.user_data['year'] = year_folder_name
@@ -159,6 +178,7 @@ async def select_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return GET_NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles the name input and concludes the setup."""
     name = update.message.text
     context.user_data['name'] = name
     await update.message.reply_text(
@@ -166,21 +186,20 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Type /help to see what I can do\\.",
         parse_mode='MarkdownV2'
     )
-    return MAIN_MENU
+    return ConversationHandler.END # End conversation after setup
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the help message with available commands."""
     if not await check_user_setup(update, context): return
     name = context.user_data.get('name', 'User')
     year_display = context.user_data.get('year_display', 'N/A')
     help_text = (
         f"👋 Hello {escape_markdown(name)}\\! Your current year is set to *{escape_markdown(year_display)}*\\.\n\n"
         "*Available Commands:*\n"
-        "• `/branches` \\- Lists branches for your year\\.\n"
-        "• `/subjects <BRANCH>` \\- Lists subjects for a branch\\.\n"
-        "• `/assignments <BRANCH> <SUBJECT>` \\- Lists available assignment numbers\\.\n"
-        "• `/notes <BRANCH> <SUBJECT>` \\- Lists available note/unit numbers\\.\n"
-        "• `/get <BRANCH> <SUBJECT> <NUMBER>` \\- Fetches an assignment file\\.\n"
-        "• `/getnote <BRANCH> <SUBJECT> <NUMBER>` \\- Fetches a note/unit file\\.\n"
+        "• `/branches` \\- Lists all branches for your year\\.\n"
+        "• `/subjects <BRANCH>` \\- Lists subjects for a specific branch\\.\n"
+        "• `/assignments <BRANCH> <SUBJECT>` \\- Shows all available assignment files\\.\n"
+        "• `/notes <BRANCH> <SUBJECT>` \\- Shows all available note/unit files\\.\n"
         "• `/suggestion` \\- Send a suggestion or feedback\\.\n"
         "• `/start` \\- To reset your year and name\\.\n"
         "• `/cancel` \\- To end any active command\\."
@@ -188,6 +207,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='MarkdownV2')
 
 async def list_branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lists the available branches for the user's selected year."""
     if not await check_user_setup(update, context): return
     year = context.user_data['year']
     year_display = context.user_data['year_display']
@@ -204,6 +224,7 @@ async def list_branches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode='MarkdownV2')
 
 async def list_subjects(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lists the subjects for a given branch."""
     if not await check_user_setup(update, context): return
     if not context.args:
         await update.message.reply_text("⚠️ Usage: `/subjects <BRANCH>`")
@@ -223,142 +244,99 @@ async def list_subjects(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = f"📖 *Subjects for {escape_markdown(year_display)}/{escape_markdown(branch)}:*\n\n{subject_list}"
     await update.message.reply_text(message, parse_mode='MarkdownV2')
 
-async def list_assignments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_items_interactive(update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str):
+    """Generic function to list files from 'assignments' or 'Notes' folders."""
     if not await check_user_setup(update, context): return
     if len(context.args) != 2:
-        await update.message.reply_text("⚠️ Usage: `/assignments <BRANCH> <SUBJECT>`")
+        await update.message.reply_text(f"⚠️ Usage: `/{item_type.lower()} <BRANCH> <SUBJECT>`")
         return
+
     year = context.user_data['year']
     branch, subject = context.args[0].upper(), context.args[1].upper()
-    assignments_folder_id = await resolve_path_to_id([year, branch, subject, "assignments"])
-    if not assignments_folder_id:
-        await update.message.reply_text(f"❌ No `assignments` folder found for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
-        return
-    service = get_drive_service()
-    query = f"'{assignments_folder_id}' in parents and trashed = false"
-    response = service.files().list(q=query, spaces='drive', fields='files(name)').execute()
-    files = response.get('files', [])
-    assignment_numbers = {int(m.group(1)) for item in files if (m := re.search(r'assignment_(\d+)', item['name'], re.IGNORECASE))}
-    if not assignment_numbers:
-        await update.message.reply_text(f"🤷 No assignments found for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
-        return
-    number_list = "\n".join(f"• `Assignment {num}`" for num in sorted(list(assignment_numbers)))
-    message = f"📄 *Assignments for {escape_markdown(branch)}/{escape_markdown(subject)}:*\n\n{number_list}"
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
 
-async def get_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_user_setup(update, context): return
-    if len(context.args) != 3:
-        await update.message.reply_text("⚠️ Usage: `/get <BRANCH> <SUBJECT> <NUMBER>`")
-        return
-    year = context.user_data['year']
-    branch, subject, number_str = context.args[0].upper(), context.args[1].upper(), context.args[2]
-    try:
-        assignment_number = int(number_str)
-    except ValueError:
-        await update.message.reply_text("⚠️ Assignment number must be an integer\\.")
+    await update.message.reply_text(f"🔎 Searching for {item_type} in `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.\\.\\.", parse_mode='MarkdownV2')
+
+    item_folder_id = await resolve_path_to_id([year, branch, subject, item_type])
+    if not item_folder_id:
+        await update.message.reply_text(f"❌ Could not find the `{item_type}` folder for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
         return
 
-    placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
-
-    assignments_folder_id = await resolve_path_to_id([year, branch, subject, "assignments"])
-    if not assignments_folder_id:
-        await placeholder_message.edit_text("❌ Assignment folder not found\\.", parse_mode='MarkdownV2')
-        return
-
-    service = get_drive_service()
-    query = f"'{assignments_folder_id}' in parents and trashed = false and name contains 'assignment_{assignment_number}'"
-    response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-    files = response.get('files', [])
+    files = await list_files_in_parent(item_folder_id)
     if not files:
-        await placeholder_message.edit_text("❌ Assignment not found\\.", parse_mode='MarkdownV2')
+        await update.message.reply_text(f"🤷 No {item_type} found for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
         return
 
-    file_to_send = files[0]
-    file_id, file_name = file_to_send['id'], file_to_send['name']
+    keyboard = []
+    for file in sorted(files, key=lambda x: x['name']):
+        button = InlineKeyboardButton(text=file['name'], callback_data=file['id'])
+        keyboard.append([button])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"📄 *Available {item_type} for {escape_markdown(branch)}/{escape_markdown(subject)}:*\n\n"
+        "Click on a file to download it\\.",
+        reply_markup=reply_markup,
+        parse_mode='MarkdownV2'
+    )
+
+async def list_assignments_interactive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /assignments command."""
+    await list_items_interactive(update, context, item_type="assignments")
+
+async def list_notes_interactive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for the /notes command."""
+    await list_items_interactive(update, context, item_type="Notes")
+
+
+async def file_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the button click to download and send a file."""
+    query = update.callback_query
+    await query.answer("✅ Request received!")
+
+    file_id = query.data
     
+    # Find the button that was clicked to get the filename
+    file_name = "file"
+    for row in query.message.reply_markup.inline_keyboard:
+        for button in row:
+            if button.callback_data == file_id:
+                file_name = button.text
+                break
+
+    placeholder_message = await query.message.reply_text(f"⏳ Getting *{escape_markdown(file_name)}*\\, please wait\\.\\.\\.", parse_mode='MarkdownV2')
+
     file_content = await download_file_from_drive(file_id)
     if file_content:
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
+        service = get_drive_service()
+        file_metadata = service.files().get(fileId=file_id, fields='name').execute()
+        actual_file_name = file_metadata.get('name', 'file')
+
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=file_content,
+            filename=actual_file_name
+        )
         await placeholder_message.delete()
-    else:
-        await placeholder_message.edit_text("⚠️ Error downloading the file from Google Drive\\.", parse_mode='MarkdownV2')
-
-async def list_notes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_user_setup(update, context): return
-    if len(context.args) != 2:
-        await update.message.reply_text("⚠️ Usage: `/notes <BRANCH> <SUBJECT>`")
-        return
-    year = context.user_data['year']
-    branch, subject = context.args[0].upper(), context.args[1].upper()
-    notes_folder_id = await resolve_path_to_id([year, branch, subject, "Notes"])
-    if not notes_folder_id:
-        await update.message.reply_text(f"❌ No `Notes` folder found for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
-        return
-    service = get_drive_service()
-    query = f"'{notes_folder_id}' in parents and trashed = false"
-    response = service.files().list(q=query, spaces='drive', fields='files(name)').execute()
-    files = response.get('files', [])
-    note_numbers = {int(m.group(1)) for item in files if (m := re.search(r'(?:unit|note)_(\d+)', item['name'], re.IGNORECASE))}
-    if not note_numbers:
-        await update.message.reply_text(f"🤷 No notes found for `{escape_markdown(branch)}/{escape_markdown(subject)}`\\.", parse_mode='MarkdownV2')
-        return
-    note_list = "\n".join(f"• `Unit {num}`" for num in sorted(list(note_numbers)))
-    message = f"📝 *Available Notes/Units for {escape_markdown(branch)}/{escape_markdown(subject)}:*\n\n{note_list}"
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await check_user_setup(update, context): return
-    if len(context.args) != 3:
-        await update.message.reply_text("⚠️ Usage: `/getnote <BRANCH> <SUBJECT> <NUMBER>`")
-        return
-    year = context.user_data['year']
-    branch, subject, number_str = context.args[0].upper(), context.args[1].upper(), context.args[2]
-    try:
-        note_number = int(number_str)
-    except ValueError:
-        await update.message.reply_text("⚠️ Note number must be an integer\\.")
-        return
-
-    placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
-
-    notes_folder_id = await resolve_path_to_id([year, branch, subject, "Notes"])
-    if not notes_folder_id:
-        await placeholder_message.edit_text("❌ Notes folder not found\\.", parse_mode='MarkdownV2')
-        return
-    
-    service = get_drive_service()
-    query = f"'{notes_folder_id}' in parents and trashed = false and (name contains 'unit_{note_number}' or name contains 'note_{note_number}')"
-    response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-    files = response.get('files', [])
-    
-    if not files:
-        await placeholder_message.edit_text("❌ Note not found\\.", parse_mode='MarkdownV2')
-        return
-
-    file_to_send = files[0]
-    file_id, file_name = file_to_send['id'], file_to_send['name']
-    
-    file_content = await download_file_from_drive(file_id)
-    if file_content:
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=file_content, filename=file_name)
-        await placeholder_message.delete()
+        await query.edit_message_text(text=f"✅ Download started for: *{escape_markdown(actual_file_name)}*", parse_mode='MarkdownV2')
     else:
         await placeholder_message.edit_text("⚠️ Error downloading the file from Google Drive\\.", parse_mode='MarkdownV2')
 
 async def suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Provides a link to a suggestion form."""
     await update.message.reply_text(
         "Got a suggestion or want to report an issue? Please fill out this form:\n\n"
         "https://forms.gle/FecbVJn69qDcsKcP8"
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancels the current conversation."""
     await update.message.reply_text(
         "Operation cancelled\\.", reply_markup=ReplyKeyboardRemove(), parse_mode='MarkdownV2'
     )
     return ConversationHandler.END
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Logs errors and sends a user-friendly message."""
     logger.error("Exception while handling an update:", exc_info=context.error)
     if isinstance(context.error, TimedOut):
         if update and hasattr(update, 'message'):
@@ -370,45 +348,36 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- Main Bot Execution (Webhook Version) ---
 
-# Initialize the bot application
 if not get_drive_service():
     logger.critical("Could not initialize Google Drive service. Exiting.")
     exit()
 
-application = (
-    Application.builder()
-    .token(TELEGRAM_BOT_TOKEN)
-    .build()
-)
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-# Add all your command and conversation handlers
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("start", start)],
     states={
         SELECT_YEAR: [MessageHandler(filters.Regex(r"^(1st|2nd|3rd|4th) Year$"), select_year)],
         GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-        MAIN_MENU: [
-            CommandHandler("help", help_command),
-            CommandHandler("branches", list_branches),
-            CommandHandler("subjects", list_subjects),
-            CommandHandler("assignments", list_assignments),
-            CommandHandler("get", get_assignment),
-            CommandHandler("notes", list_notes),
-            CommandHandler("getnote", get_note),
-            CommandHandler("suggestion", suggestion),
-        ],
     },
-    fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+    fallbacks=[CommandHandler("cancel", cancel)],
     per_user=True,
-    per_chat=True
+    per_chat=True,
+    # Allow other handlers to be used while the conversation is active in a different state
+    allow_reentry=True
 )
 
 application.add_handler(conv_handler)
+application.add_handler(CommandHandler("help", help_command))
+application.add_handler(CommandHandler("branches", list_branches))
+application.add_handler(CommandHandler("subjects", list_subjects))
+application.add_handler(CommandHandler("assignments", list_assignments_interactive))
+application.add_handler(CommandHandler("notes", list_notes_interactive))
+application.add_handler(CommandHandler("suggestion", suggestion))
+application.add_handler(CallbackQueryHandler(file_button_callback))
 application.add_error_handler(error_handler)
 
-# --- Initialize Application ---
-# This block runs once when the module is imported by Gunicorn.
-# It ensures the application is ready to process updates when the first request comes in.
+# --- Initialize Application for Webhook ---
 try:
     loop = asyncio.get_running_loop()
 except RuntimeError:
@@ -417,7 +386,7 @@ except RuntimeError:
 
 loop.run_until_complete(application.initialize())
 
-
+# --- Flask App for Webhook Endpoint ---
 flask_app = Flask(__name__)
 app = WsgiToAsgi(flask_app)
 
