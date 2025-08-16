@@ -27,6 +27,8 @@ from googleapiclient.http import MediaIoBaseDownload
 
 # Webhook-related imports
 from flask import Flask, request
+# NEW: Import the WSGI to ASGI adapter
+from asgiref.wsgi import WsgiToAsgi
 
 # --- Configuration and Setup ---
 load_dotenv()
@@ -378,7 +380,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 if not get_drive_service():
     logger.critical("Could not initialize Google Drive service. Exiting.")
     exit()
-# setup_database() call removed
 
 application = (
     Application.builder()
@@ -411,10 +412,12 @@ conv_handler = ConversationHandler(
 application.add_handler(conv_handler)
 application.add_error_handler(error_handler)
 
-# This is the main Flask app object that Gunicorn will run
-app = Flask(__name__)
+# NEW: Create the Flask app first
+flask_app = Flask(__name__)
+# NEW: Wrap the Flask app in the ASGI adapter. This is what Gunicorn will run.
+app = WsgiToAsgi(flask_app)
 
-@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+@flask_app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 async def webhook() -> str:
     """This endpoint listens for updates from Telegram."""
     try:
