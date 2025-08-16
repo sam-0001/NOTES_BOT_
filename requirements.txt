@@ -36,3 +36,4 @@ google-auth-oauthlib
 Flask
 gunicorn
 uvicorn
+asgiref
