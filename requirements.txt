@@ -28,3 +28,11 @@ rsa==4.9.1
 sniffio==1.3.1
 uritemplate==4.2.0
 urllib3==2.5.0
+python-telegram-bot[webhooks]
+python-dotenv
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+Flask
+gunicorn
+uvicorn
