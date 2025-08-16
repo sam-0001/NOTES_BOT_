@@ -27,7 +27,6 @@ from googleapiclient.http import MediaIoBaseDownload
 
 # Webhook-related imports
 from flask import Flask, request
-# NEW: Import the WSGI to ASGI adapter
 from asgiref.wsgi import WsgiToAsgi
 
 # --- Configuration and Setup ---
@@ -56,9 +55,6 @@ def escape_markdown(text: str) -> str:
         text = str(text)
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
-
-# --- Database Management (REMOVED) ---
-# All database and caching functions have been removed to run on Render's free tier.
 
 # --- Google Drive API Logic ---
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -265,7 +261,6 @@ async def get_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
 
-    # Caching logic removed
     assignments_folder_id = await resolve_path_to_id([year, branch, subject, "assignments"])
     if not assignments_folder_id:
         await placeholder_message.edit_text("❌ Assignment folder not found\\.", parse_mode='MarkdownV2')
@@ -327,7 +322,6 @@ async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     placeholder_message = await update.message.reply_text("⏳ Getting your file, please wait\\.\\.\\.", parse_mode='MarkdownV2')
 
-    # Caching logic removed
     notes_folder_id = await resolve_path_to_id([year, branch, subject, "Notes"])
     if not notes_folder_id:
         await placeholder_message.edit_text("❌ Notes folder not found\\.", parse_mode='MarkdownV2')
@@ -412,6 +406,18 @@ conv_handler = ConversationHandler(
 application.add_handler(conv_handler)
 application.add_error_handler(error_handler)
 
+# --- Initialize Application ---
+# This block runs once when the module is imported by Gunicorn.
+# It ensures the application is ready to process updates when the first request comes in.
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+loop.run_until_complete(application.initialize())
+
+
 flask_app = Flask(__name__)
 app = WsgiToAsgi(flask_app)
 
@@ -419,13 +425,9 @@ app = WsgiToAsgi(flask_app)
 async def webhook() -> str:
     """This endpoint listens for updates from Telegram."""
     try:
-        # CORRECTED: Removed 'await' from the following line
         update = Update.de_json(request.get_json(), application.bot)
         await application.process_update(update)
         return "OK"
     except Exception as e:
         logger.error(f"Error in webhook: {e}")
         return "Error", 500
-
-# The setup_bot() function and if __name__ == "__main__" block have been removed.
-# The webhook must be set manually using the separate setup_webhook.py script.
