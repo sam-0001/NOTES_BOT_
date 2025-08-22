@@ -1,5 +1,5 @@
 # main.py
-# This version fixes the TypeError with an updated TinyDBPersistence class.
+# This version fixes the FileNotFoundError on the first run.
 
 import asyncio
 import os
@@ -29,18 +29,24 @@ class TinyDBPersistence(BasePersistence):
     """A custom persistence class that uses TinyDB for storage."""
     def __init__(self, filepath: str):
         super().__init__()
-        self.db = TinyDB(filepath)
+        # --- ADDED ERROR HANDLING FOR FIRST RUN ---
+        try:
+            self.db = TinyDB(filepath)
+        except FileNotFoundError:
+            # If the /data directory doesn't exist, create it
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            self.db = TinyDB(filepath)
+
         self.user_data_table = self.db.table('user_data')
         self.chat_data_table = self.db.table('chat_data')
         self.bot_data_table = self.db.table('bot_data')
         self.on_flush = False
 
+    # ... (All other methods in the class remain exactly the same) ...
     def _get_data_from_table(self, table):
-        """Helper to convert TinyDB table data to the format PTB expects."""
         return {int(entry['key']): entry['value'] for entry in table.all()}
 
     def _update_table_with_data(self, table, data):
-        """Helper to write PTB data into a TinyDB table."""
         table.truncate()
         entries = [{'key': str(k), 'value': v} for k, v in data.items()]
         if entries:
@@ -68,7 +74,6 @@ class TinyDBPersistence(BasePersistence):
     async def flush(self):
         pass
 
-    # --- ADDED METHODS TO COMPLY WITH NEWER PTB VERSIONS ---
     async def drop_chat_data(self, chat_id: int) -> None:
         self.chat_data_table.remove(doc_ids=[chat_id])
 
@@ -76,11 +81,9 @@ class TinyDBPersistence(BasePersistence):
         self.user_data_table.remove(doc_ids=[user_id])
 
     async def get_callback_data(self):
-        # This feature is not used in this bot, returning None is safe.
         return None
 
     async def get_conversations(self, name: str):
-        # This feature is not used in this bot, returning empty dict is safe.
         return {}
 
     async def refresh_bot_data(self, bot_data):
@@ -93,17 +96,14 @@ class TinyDBPersistence(BasePersistence):
         self.user_data_table.update({'value': user_data}, doc_id=user_id)
 
     async def update_callback_data(self, data):
-        # This feature is not used in this bot, so we can pass.
         pass
 
     async def update_conversation(self, name: str, key, new_state):
-        # This feature is not used in this bot, so we can pass.
         pass
 
 # ==============================================================================
 # SECTION 2: BOT AND WEB SERVER SETUP (Unchanged)
 # ==============================================================================
-
 persistence = TinyDBPersistence(filepath=config.PERSISTENCE_FILEPATH)
 
 application = (
@@ -118,7 +118,6 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # ==============================================================================
 # SECTION 3: MAIN BOT LOGIC & WEBHOOKS (Unchanged)
 # ==============================================================================
-
 async def main_setup() -> None:
     """Initializes the bot and its handlers."""
     conv_handler = ConversationHandler(
