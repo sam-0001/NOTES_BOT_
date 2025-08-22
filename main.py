@@ -14,7 +14,7 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    JSONPersistence,  # <-- 1. Import JSONPersistence
+    JSONPersistence,  # <-- Correct import for v22.3
 )
 
 # Local imports
@@ -22,7 +22,6 @@ import config
 import handlers as h
 
 # --- Bot and Web Server Setup ---
-# 2. Use JSONPersistence, saving to the path on the persistent disk
 persistence = JSONPersistence(filepath=config.PERSISTENCE_FILEPATH)
 
 application = (
@@ -45,7 +44,7 @@ async def main_setup() -> None:
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
         fallbacks=[CommandHandler("start", h.start)],
-        persistent=True,  # <-- 3. Set persistent back to True
+        persistent=True,
         name="setup_conversation"
     )
     application.add_handler(conv_handler)
