@@ -1,5 +1,5 @@
 # main.py
-# This version fixes the FileNotFoundError on the first run.
+# This version fixes the PermissionError.
 
 import asyncio
 import os
@@ -29,14 +29,10 @@ class TinyDBPersistence(BasePersistence):
     """A custom persistence class that uses TinyDB for storage."""
     def __init__(self, filepath: str):
         super().__init__()
-        # --- ADDED ERROR HANDLING FOR FIRST RUN ---
-        try:
-            self.db = TinyDB(filepath)
-        except FileNotFoundError:
-            # If the /data directory doesn't exist, create it
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            self.db = TinyDB(filepath)
-
+        # TinyDB will create the file if it doesn't exist,
+        # as long as the parent directory (/data) already exists.
+        self.db = TinyDB(filepath)
+        
         self.user_data_table = self.db.table('user_data')
         self.chat_data_table = self.db.table('chat_data')
         self.bot_data_table = self.db.table('bot_data')
