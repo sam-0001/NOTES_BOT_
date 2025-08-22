@@ -1,5 +1,5 @@
 # main.py
-# This version fixes the PermissionError.
+# This version uses a custom MongoPersistence class for robust, persistent storage.
 
 import asyncio
 import os
@@ -16,91 +16,81 @@ from telegram.ext import (
     filters,
     BasePersistence,
 )
-from tinydb import TinyDB
+from pymongo import MongoClient
 
 # Local imports
 import config
 import handlers as h
 
 # ==============================================================================
-# SECTION 1: UPDATED TinyDB PERSISTENCE CLASS
+# SECTION 1: CUSTOM MONGODB PERSISTENCE CLASS
 # ==============================================================================
-class TinyDBPersistence(BasePersistence):
-    """A custom persistence class that uses TinyDB for storage."""
-    def __init__(self, filepath: str):
+class MongoPersistence(BasePersistence):
+    """A custom persistence class that uses MongoDB Atlas for storage."""
+    def __init__(self, mongo_url: str, db_name: str = "telegram_bot_db"):
         super().__init__()
-        # TinyDB will create the file if it doesn't exist,
-        # as long as the parent directory (/data) already exists.
-        self.db = TinyDB(filepath)
-        
-        self.user_data_table = self.db.table('user_data')
-        self.chat_data_table = self.db.table('chat_data')
-        self.bot_data_table = self.db.table('bot_data')
-        self.on_flush = False
-
-    # ... (All other methods in the class remain exactly the same) ...
-    def _get_data_from_table(self, table):
-        return {int(entry['key']): entry['value'] for entry in table.all()}
-
-    def _update_table_with_data(self, table, data):
-        table.truncate()
-        entries = [{'key': str(k), 'value': v} for k, v in data.items()]
-        if entries:
-            table.insert_multiple(entries)
+        self.client = MongoClient(mongo_url)
+        self.db = self.client[db_name]
+        self.user_data_collection = self.db["user_data"]
+        self.chat_data_collection = self.db["chat_data"]
+        self.bot_data_collection = self.db["bot_data"]
 
     async def get_bot_data(self):
-        entry = self.bot_data_table.get(doc_id=1)
-        return entry.get('value', {}) if entry else {}
+        doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
+        return doc.get("data", {}) if doc else {}
 
     async def get_chat_data(self):
-        return self._get_data_from_table(self.chat_data_table)
+        all_docs = self.chat_data_collection.find({})
+        return {doc["_id"]: doc.get("data", {}) for doc in all_docs}
 
     async def get_user_data(self):
-        return self._get_data_from_table(self.user_data_table)
+        all_docs = self.user_data_collection.find({})
+        return {doc["_id"]: doc.get("data", {}) for doc in all_docs}
 
     async def update_bot_data(self, data):
-        self.bot_data_table.upsert({'value': data}, doc_id=1)
+        self.bot_data_collection.update_one(
+            {"_id": "bot_data_singleton"}, {"$set": {"data": data}}, upsert=True
+        )
 
-    async def update_chat_data(self, data):
-        self._update_table_with_data(self.chat_data_table, data)
+    async def update_chat_data(self, chat_id: int, data):
+        self.chat_data_collection.update_one(
+            {"_id": chat_id}, {"$set": {"data": data}}, upsert=True
+        )
 
-    async def update_user_data(self, data):
-        self._update_table_with_data(self.user_data_table, data)
+    async def update_user_data(self, user_id: int, data):
+        self.user_data_collection.update_one(
+            {"_id": user_id}, {"$set": {"data": data}}, upsert=True
+        )
         
     async def flush(self):
         pass
+    
+    # Methods required by newer PTB versions
+    async def drop_chat_data(self, chat_id: int): 
+        self.chat_data_collection.delete_one({"_id": chat_id})
+    
+    async def drop_user_data(self, user_id: int): 
+        self.user_data_collection.delete_one({"_id": user_id})
 
-    async def drop_chat_data(self, chat_id: int) -> None:
-        self.chat_data_table.remove(doc_ids=[chat_id])
-
-    async def drop_user_data(self, user_id: int) -> None:
-        self.user_data_table.remove(doc_ids=[user_id])
-
-    async def get_callback_data(self):
-        return None
-
-    async def get_conversations(self, name: str):
-        return {}
-
-    async def refresh_bot_data(self, bot_data):
-        self.bot_data_table.update({'value': bot_data}, doc_id=1)
-
-    async def refresh_chat_data(self, chat_id: int, chat_data):
-        self.chat_data_table.update({'value': chat_data}, doc_id=chat_id)
-
-    async def refresh_user_data(self, user_id: int, user_data):
-        self.user_data_table.update({'value': user_data}, doc_id=user_id)
-
-    async def update_callback_data(self, data):
-        pass
-
-    async def update_conversation(self, name: str, key, new_state):
-        pass
+    async def get_callback_data(self): return None
+    async def get_conversations(self, name: str): return {}
+    async def refresh_bot_data(self, bot_data): await self.update_bot_data(bot_data)
+    async def refresh_chat_data(self, chat_id: int, chat_data): await self.update_chat_data(chat_id, chat_data)
+    async def refresh_user_data(self, user_id: int, user_data): await self.update_user_data(user_id, user_data)
+    async def update_callback_data(self, data): pass
+    async def update_conversation(self, name: str, key, new_state): pass
 
 # ==============================================================================
-# SECTION 2: BOT AND WEB SERVER SETUP (Unchanged)
+# SECTION 2: BOT AND WEB SERVER SETUP
 # ==============================================================================
-persistence = TinyDBPersistence(filepath=config.PERSISTENCE_FILEPATH)
+
+# Get the MongoDB URL from environment variables
+MONGO_URL = os.getenv("MONGO_URL")
+if not MONGO_URL:
+    raise ValueError("MONGO_URL environment variable not set!")
+
+# Use our new custom MongoPersistence class
+persistence = MongoPersistence(mongo_url=MONGO_URL)
 
 application = (
     Application.builder()
@@ -112,8 +102,9 @@ application = (
 app = FastAPI(docs_url=None, redoc_url=None)
 
 # ==============================================================================
-# SECTION 3: MAIN BOT LOGIC & WEBHOOKS (Unchanged)
+# SECTION 3: MAIN BOT LOGIC & WEBHOOKS
 # ==============================================================================
+
 async def main_setup() -> None:
     """Initializes the bot and its handlers."""
     conv_handler = ConversationHandler(
@@ -135,9 +126,11 @@ async def main_setup() -> None:
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
+    # Initialize the application
     await application.initialize()
     await application.start()
 
+    # --- Webhook Logic for Render ---
     webhook_base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("LOCAL_WEBHOOK_URL")
 
     if webhook_base_url:
@@ -159,8 +152,10 @@ async def webhook(request: Request) -> None:
 
 @app.on_event("startup")
 async def on_startup():
+    """Runs the bot initialization when the server starts."""
     await main_setup()
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    """Stops the bot gracefully when the server shuts down."""
     await application.stop()
