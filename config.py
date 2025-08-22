@@ -13,7 +13,8 @@ GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 SERVICE_ACCOUNT_ENV = os.getenv("SERVICE_ACCOUNT_JSON")  # Can be a path OR raw JSON
 
 # --- Bot Settings ---
-PERSISTENCE_FILENAME = "bot_user_data.json" # Local file for user data
+# Path for the persistence file on Render's persistent disk
+PERSISTENCE_FILEPATH = "/data/bot_user_data.json"
 
 # --- Unique Greetings ---
 GREETINGS = [
@@ -29,7 +30,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-# ADD THIS LINE to silence the httpx logger
+# Silence the noisy httpx logger to avoid exposing the bot token in logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
