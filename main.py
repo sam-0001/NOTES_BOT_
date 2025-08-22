@@ -1,5 +1,5 @@
 # main.py
-# This version is optimized for hosting on Render with a persistent disk.
+# This version uses a custom TinyDB class for robust, persistent storage on Render.
 
 import asyncio
 import os
@@ -14,15 +14,67 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    JSONPersistence,  # <-- Correct import for v22.3
+    BasePersistence,  # <-- Import BasePersistence to create our own
 )
+from tinydb import TinyDB
 
 # Local imports
 import config
 import handlers as h
 
-# --- Bot and Web Server Setup ---
-persistence = JSONPersistence(filepath=config.PERSISTENCE_FILEPATH)
+# ==============================================================================
+# SECTION 1: CUSTOM TinyDB PERSISTENCE CLASS
+# ==============================================================================
+class TinyDBPersistence(BasePersistence):
+    """A custom persistence class that uses TinyDB for storage."""
+    def __init__(self, filepath: str):
+        super().__init__()
+        self.db = TinyDB(filepath)
+        self.user_data_table = self.db.table('user_data')
+        self.chat_data_table = self.db.table('chat_data')
+        self.bot_data_table = self.db.table('bot_data')
+        self.on_flush = False
+
+    def _get_data_from_table(self, table):
+        """Helper to convert TinyDB table data to the format PTB expects."""
+        return {int(entry['key']): entry['value'] for entry in table.all()}
+
+    def _update_table_with_data(self, table, data):
+        """Helper to write PTB data into a TinyDB table."""
+        table.truncate()  # Clear the table before writing
+        entries = [{'key': str(k), 'value': v} for k, v in data.items()]
+        if entries:
+            table.insert_multiple(entries)
+
+    async def get_bot_data(self):
+        entry = self.bot_data_table.get(doc_id=1)
+        return entry.get('value', {}) if entry else {}
+
+    async def get_chat_data(self):
+        return self._get_data_from_table(self.chat_data_table)
+
+    async def get_user_data(self):
+        return self._get_data_from_table(self.user_data_table)
+
+    async def update_bot_data(self, data):
+        self.bot_data_table.upsert({'value': data}, doc_id=1)
+
+    async def update_chat_data(self, data):
+        self._update_table_with_data(self.chat_data_table, data)
+
+    async def update_user_data(self, data):
+        self._update_table_with_data(self.user_data_table, data)
+        
+    async def flush(self):
+        # TinyDB writes data immediately, so flush doesn't need to do anything.
+        pass
+
+# ==============================================================================
+# SECTION 2: BOT AND WEB SERVER SETUP
+# ==============================================================================
+
+# Use our new custom TinyDBPersistence class
+persistence = TinyDBPersistence(filepath=config.PERSISTENCE_FILEPATH)
 
 application = (
     Application.builder()
@@ -33,7 +85,10 @@ application = (
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
-# --- Main Bot Logic ---
+# ==============================================================================
+# SECTION 3: MAIN BOT LOGIC & WEBHOOKS
+# ==============================================================================
+
 async def main_setup() -> None:
     """Initializes the bot and its handlers."""
     conv_handler = ConversationHandler(
@@ -69,7 +124,6 @@ async def main_setup() -> None:
     else:
         config.logger.warning("Webhook URL not found. Set RENDER_EXTERNAL_URL or LOCAL_WEBHOOK_URL.")
 
-# --- Webhook Endpoint ---
 @app.post("/webhook")
 async def webhook(request: Request) -> None:
     """Handles incoming updates from Telegram."""
@@ -80,7 +134,6 @@ async def webhook(request: Request) -> None:
     except Exception as e:
         config.logger.error(f"Error processing update: {e}")
 
-# --- Server Lifecycle ---
 @app.on_event("startup")
 async def on_startup():
     """Runs the bot initialization when the server starts."""
