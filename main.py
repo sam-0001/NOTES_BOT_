@@ -1,5 +1,5 @@
 # main.py
-# This version uses a custom TinyDB class for robust, persistent storage on Render.
+# This version fixes the TypeError with an updated TinyDBPersistence class.
 
 import asyncio
 import os
@@ -14,7 +14,7 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    BasePersistence,  # <-- Import BasePersistence to create our own
+    BasePersistence,
 )
 from tinydb import TinyDB
 
@@ -23,7 +23,7 @@ import config
 import handlers as h
 
 # ==============================================================================
-# SECTION 1: CUSTOM TinyDB PERSISTENCE CLASS
+# SECTION 1: UPDATED TinyDB PERSISTENCE CLASS
 # ==============================================================================
 class TinyDBPersistence(BasePersistence):
     """A custom persistence class that uses TinyDB for storage."""
@@ -41,7 +41,7 @@ class TinyDBPersistence(BasePersistence):
 
     def _update_table_with_data(self, table, data):
         """Helper to write PTB data into a TinyDB table."""
-        table.truncate()  # Clear the table before writing
+        table.truncate()
         entries = [{'key': str(k), 'value': v} for k, v in data.items()]
         if entries:
             table.insert_multiple(entries)
@@ -66,14 +66,44 @@ class TinyDBPersistence(BasePersistence):
         self._update_table_with_data(self.user_data_table, data)
         
     async def flush(self):
-        # TinyDB writes data immediately, so flush doesn't need to do anything.
+        pass
+
+    # --- ADDED METHODS TO COMPLY WITH NEWER PTB VERSIONS ---
+    async def drop_chat_data(self, chat_id: int) -> None:
+        self.chat_data_table.remove(doc_ids=[chat_id])
+
+    async def drop_user_data(self, user_id: int) -> None:
+        self.user_data_table.remove(doc_ids=[user_id])
+
+    async def get_callback_data(self):
+        # This feature is not used in this bot, returning None is safe.
+        return None
+
+    async def get_conversations(self, name: str):
+        # This feature is not used in this bot, returning empty dict is safe.
+        return {}
+
+    async def refresh_bot_data(self, bot_data):
+        self.bot_data_table.update({'value': bot_data}, doc_id=1)
+
+    async def refresh_chat_data(self, chat_id: int, chat_data):
+        self.chat_data_table.update({'value': chat_data}, doc_id=chat_id)
+
+    async def refresh_user_data(self, user_id: int, user_data):
+        self.user_data_table.update({'value': user_data}, doc_id=user_id)
+
+    async def update_callback_data(self, data):
+        # This feature is not used in this bot, so we can pass.
+        pass
+
+    async def update_conversation(self, name: str, key, new_state):
+        # This feature is not used in this bot, so we can pass.
         pass
 
 # ==============================================================================
-# SECTION 2: BOT AND WEB SERVER SETUP
+# SECTION 2: BOT AND WEB SERVER SETUP (Unchanged)
 # ==============================================================================
 
-# Use our new custom TinyDBPersistence class
 persistence = TinyDBPersistence(filepath=config.PERSISTENCE_FILEPATH)
 
 application = (
@@ -86,7 +116,7 @@ application = (
 app = FastAPI(docs_url=None, redoc_url=None)
 
 # ==============================================================================
-# SECTION 3: MAIN BOT LOGIC & WEBHOOKS
+# SECTION 3: MAIN BOT LOGIC & WEBHOOKS (Unchanged)
 # ==============================================================================
 
 async def main_setup() -> None:
@@ -110,11 +140,9 @@ async def main_setup() -> None:
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
-    # Initialize the application
     await application.initialize()
     await application.start()
 
-    # --- Webhook Logic for Render ---
     webhook_base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("LOCAL_WEBHOOK_URL")
 
     if webhook_base_url:
@@ -136,10 +164,8 @@ async def webhook(request: Request) -> None:
 
 @app.on_event("startup")
 async def on_startup():
-    """Runs the bot initialization when the server starts."""
     await main_setup()
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    """Stops the bot gracefully when the server shuts down."""
     await application.stop()
