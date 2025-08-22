@@ -1,5 +1,5 @@
 # main.py
-# This version is optimized for hosting on Render and local testing.
+# This version is optimized for hosting on Render with a persistent disk.
 
 import asyncio
 import os
@@ -14,7 +14,7 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    DictPersistence,
+    JSONPersistence,  # <-- 1. Import JSONPersistence
 )
 
 # Local imports
@@ -22,7 +22,8 @@ import config
 import handlers as h
 
 # --- Bot and Web Server Setup ---
-persistence = DictPersistence()
+# 2. Use JSONPersistence, saving to the path on the persistent disk
+persistence = JSONPersistence(filepath=config.PERSISTENCE_FILEPATH)
 
 application = (
     Application.builder()
@@ -36,7 +37,6 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # --- Main Bot Logic ---
 async def main_setup() -> None:
     """Initializes the bot and its handlers."""
-    # ... (ConversationHandler and other handlers remain unchanged)
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
@@ -45,7 +45,7 @@ async def main_setup() -> None:
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
         fallbacks=[CommandHandler("start", h.start)],
-        persistent=False,
+        persistent=True,  # <-- 3. Set persistent back to True
         name="setup_conversation"
     )
     application.add_handler(conv_handler)
@@ -60,8 +60,7 @@ async def main_setup() -> None:
     await application.initialize()
     await application.start()
 
-    # --- MODIFIED WEBHOOK LOGIC FOR RENDER ---
-    # Prioritize Render's public URL, fall back to a local ngrok URL
+    # --- Webhook Logic for Render ---
     webhook_base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("LOCAL_WEBHOOK_URL")
 
     if webhook_base_url:
@@ -69,7 +68,7 @@ async def main_setup() -> None:
         await application.bot.set_webhook(url=webhook_url)
         config.logger.info(f"Webhook set successfully to {webhook_url}")
     else:
-        config.logger.warning("Webhook URL not found. Set RENDER_EXTERNAL_URL on the server or LOCAL_WEBHOOK_URL in .env for local testing.")
+        config.logger.warning("Webhook URL not found. Set RENDER_EXTERNAL_URL or LOCAL_WEBHOOK_URL.")
 
 # --- Webhook Endpoint ---
 @app.post("/webhook")
