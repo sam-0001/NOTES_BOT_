@@ -32,7 +32,7 @@ async def send_wait_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     """Sends a waiting message if a task takes too long."""
     try:
         # Wait for 7 seconds before sending the message
-        await asyncio.sleep(7)
+        await asyncio.sleep(2)
         await context.bot.send_message(chat_id, "This is taking a moment, please wait...")
     except asyncio.CancelledError:
         # This is expected if the main task finishes before the wait time
