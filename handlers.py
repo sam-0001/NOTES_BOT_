@@ -1,5 +1,6 @@
 # handlers.py
 
+import io
 import random
 import asyncio
 from telegram import (
@@ -12,12 +13,18 @@ from telegram import (
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
 )
 
 # Local imports
 import config
-from drive_utils import get_drive_service, get_folder_id, list_items, download_file
-from bot_helpers import busy_lock, check_user_setup, send_wait_message
+from drive_utils import get_drive_service, get_folder_id, list_items, download_file, upload_file
+from bot_helpers import owner_only, busy_lock, check_user_setup, send_wait_message
+
+# Conversation states
+AWAIT_NOTICE_FILE = 0
 
 # --- Conversation Handlers (for /start setup) ---
 
@@ -99,18 +106,28 @@ async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # --- Standard Command Handlers ---
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the help message."""
-    # UPDATED HELP TEXT
+    """Displays a dynamic help message based on user permissions."""
+    user_id = update.effective_user.id
+    
     help_text = (
         "Here are the available commands:\n\n"
-        "🚀 */start* - Set up your profile (only needed once).\n"
-        "🔄 */reset* - Clear your data and start over.\n"
+        "🚀 */start* - Set up your profile.\n"
+        "📢 */notice* - View the latest notice.\n"
+        "📖 */notes* - Get notes for a subject.\n"
+        "✍️ */assignments* - Get assignments for a subject.\n"
+        "💡 */suggest* - Share your feedback or ideas.\n"
         "👤 */myinfo* - Check your current settings.\n"
-        "📖 */notes* - Interactively get notes for a subject.\n"
-        "✍️ */assignments* - Interactively get assignments for a subject.\n"
-        "💡 */suggest* - Share your feedback or ideas with us.\n"
+        "🔄 */reset* - Clear your data and start over.\n"
         "❓ */help* - Show this help message."
     )
+    
+    if user_id in config.OWNER_IDS:
+        admin_text = (
+            "\n\n*Admin Commands:*\n"
+            "🤫 */postnotice* - Post a new notice."
+        )
+        help_text += admin_text
+
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
@@ -135,7 +152,6 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("You haven't completed the setup yet! Please run /start.")
 
 
-# NEW FUNCTION for the /suggest command
 async def suggestion_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a message with a link to the suggestions Google Form."""
     suggestion_text = (
@@ -197,8 +213,6 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-# --- Callback Query Handler (for inline buttons) ---
-
 @busy_lock
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles all inline button presses."""
@@ -254,6 +268,84 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             try:
                 await query.delete_message()
             except Exception:
-                pass # Ignore if message can't be deleted
+                pass
         else:
             await query.edit_message_text(text=f"❌ Sorry, failed to download '{file_name}'.")
+
+
+# --- Owner & Notice Commands ---
+
+@owner_only
+async def post_notice_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the notice posting process for owners."""
+    await update.message.reply_text("Please send the file you want to post as a notice. To cancel, type /cancel.")
+    return AWAIT_NOTICE_FILE
+
+async def receive_notice_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receives the file, uploads it, and saves it as the current notice."""
+    doc = update.message.document
+    if not doc:
+        await update.message.reply_text("That's not a file. Please send a document or type /cancel.")
+        return AWAIT_NOTICE_FILE
+
+    await update.message.reply_text("Got it. Uploading to Google Drive...")
+    
+    file_handle = io.BytesIO()
+    file_obj = await doc.get_file()
+    await file_obj.download_to_memory(file_handle)
+    file_handle.seek(0)
+
+    service = get_drive_service()
+    data_folder_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, "DATA")
+    if not data_folder_id:
+        await update.message.reply_text("❌ Error: The 'DATA' folder was not found in Google Drive.")
+        return ConversationHandler.END
+
+    uploaded_file = upload_file(service, data_folder_id, doc.file_name, file_handle, doc.mime_type)
+
+    if not uploaded_file:
+        await update.message.reply_text("❌ Sorry, there was an error uploading the file.")
+        return ConversationHandler.END
+
+    notice_data = {
+        "file_name": doc.file_name,
+        "file_link": uploaded_file.get('webViewLink'),
+        "timestamp": update.message.date
+    }
+    
+    context.application.persistence.db["notices"].update_one(
+        {"_id": "latest_notice"}, {"$set": notice_data}, upsert=True
+    )
+    
+    await update.message.reply_text("✅ Notice has been successfully posted!")
+    return ConversationHandler.END
+
+async def cancel_notice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancels the notice posting process."""
+    await update.message.reply_text("Notice posting cancelled.")
+    return ConversationHandler.END
+
+async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allows any user to view the latest notice."""
+    notice_doc = context.application.persistence.db["notices"].find_one({"_id": "latest_notice"})
+    
+    if not notice_doc:
+        await update.message.reply_text("There are no notices at the moment.")
+        return
+
+    file_name = notice_doc.get("file_name")
+    file_link = notice_doc.get("file_link")
+    timestamp = notice_doc.get("timestamp").strftime("%d %b %Y, %I:%M %p")
+    
+    message = (
+        f"📢 *Latest Notice*\n\n"
+        f"📄 **File:** `{file_name}`\n"
+        f"🗓️ **Posted on:** {timestamp}"
+    )
+    keyboard = [[InlineKeyboardButton("Download Notice", url=file_link)]]
+    
+    await update.message.reply_text(
+        message, 
+        reply_markup=InlineKeyboardMarkup(keyboard), 
+        parse_mode="Markdown"
+    )
