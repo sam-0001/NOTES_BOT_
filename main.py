@@ -124,6 +124,7 @@ async def main_setup() -> None:
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("notes", h.file_selection_command))
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
+    application.add_handler(CommandHandler("suggest", h.suggestion_command)) 
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
     # Initialize the application
