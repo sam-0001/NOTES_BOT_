@@ -100,6 +100,7 @@ async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Displays the help message."""
+    # UPDATED HELP TEXT
     help_text = (
         "Here are the available commands:\n\n"
         "🚀 */start* - Set up your profile (only needed once).\n"
@@ -107,6 +108,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "👤 */myinfo* - Check your current settings.\n"
         "📖 */notes* - Interactively get notes for a subject.\n"
         "✍️ */assignments* - Interactively get assignments for a subject.\n"
+        "💡 */suggest* - Share your feedback or ideas with us.\n"
         "❓ */help* - Show this help message."
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -131,6 +133,24 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(text, parse_mode="Markdown")
     else:
         await update.message.reply_text("You haven't completed the setup yet! Please run /start.")
+
+
+# NEW FUNCTION for the /suggest command
+async def suggestion_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a message with a link to the suggestions Google Form."""
+    suggestion_text = (
+        "Thank you for using our bot! We are always looking to improve and "
+        "your feedback is invaluable to us. 😊\n\n"
+        "Please share your thoughts, ideas, or any issues you've faced. We read every suggestion!"
+    )
+    keyboard = [[
+        InlineKeyboardButton(
+            text="✍️ Give a Suggestion",
+            url="https://forms.gle/TpNB1mD15To6bhQn8"
+        )
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(suggestion_text, reply_markup=reply_markup)
 
 
 @busy_lock
