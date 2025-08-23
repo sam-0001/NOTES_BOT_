@@ -7,7 +7,7 @@ import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload # <-- Added MediaIoBaseUpload
 
 import config # Import variables from config.py
 
@@ -22,7 +22,8 @@ def _load_service_account_credentials():
     if not config.SERVICE_ACCOUNT_ENV:
         raise RuntimeError("SERVICE_ACCOUNT_JSON env var is missing.")
 
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    # 1. UPDATED SCOPE FOR WRITE ACCESS
+    scopes = ['https://www.googleapis.com/auth/drive']
 
     if os.path.exists(config.SERVICE_ACCOUNT_ENV):
         return service_account.Credentials.from_service_account_file(
@@ -94,4 +95,16 @@ def download_file(service, file_id):
         return file_handle
     except HttpError as e:
         logger.error(f"An error occurred while downloading file ID '{file_id}': {e}")
+        return None
+
+# 2. ADDED NEW UPLOAD FUNCTION
+def upload_file(service, folder_id, file_name, file_handle, mimetype='application/octet-stream'):
+    """Uploads a file from a file-like object to a specific Google Drive folder."""
+    try:
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(file_handle, mimetype=mimetype, resumable=True)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+        return file
+    except HttpError as e:
+        logger.error(f"An error occurred during file upload: {e}")
         return None
