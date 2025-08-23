@@ -4,6 +4,7 @@ import asyncio
 from functools import wraps
 from telegram import Update
 from telegram.ext import ContextTypes
+import config  # <-- Added this import for OWNER_IDS
 
 def busy_lock(func):
     """Decorator to prevent a user from running commands concurrently."""
@@ -31,9 +32,25 @@ def check_user_setup(user_data):
 async def send_wait_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     """Sends a waiting message if a task takes too long."""
     try:
-        # Wait for 7 seconds before sending the message
-        await asyncio.sleep(2)
-        await context.bot.send_message(chat_id, "This is taking a moment, please wait...")
+        # Wait for 3 seconds before sending the message
+        await asyncio.sleep(3)
+        wait_message = (
+            "We're getting your file, please wait. Thank you for your patience, "
+            "we are always trying to make it faster! 🚀"
+        )
+        await context.bot.send_message(chat_id, wait_message)
     except asyncio.CancelledError:
-        # This is expected if the main task finishes before the wait time
+        # This is expected if the download finishes in under 3 seconds
         pass
+
+# --- ADDED THIS FUNCTION ---
+def owner_only(func):
+    """Decorator to restrict a command to owners only."""
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user_id = update.effective_user.id
+        if user_id not in config.OWNER_IDS:
+            await update.message.reply_text("⛔ Sorry, you don't have permission to use this command.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
