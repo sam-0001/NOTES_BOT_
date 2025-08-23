@@ -14,7 +14,7 @@ SERVICE_ACCOUNT_ENV = os.getenv("SERVICE_ACCOUNT_JSON")  # Can be a path OR raw 
 
 # --- Bot Settings ---
 # Path for the persistence file on Render's persistent disk
-PERSISTENCE_FILEPATH = "/data/bot_user_data.json"
+PERSISTENCE_FILEPATH = "/data/db.json" # Using db.json for TinyDB
 
 # --- Unique Greetings ---
 GREETINGS = [
@@ -30,7 +30,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-# Silence the noisy httpx logger to avoid exposing the bot token in logs
+# Silence noisy library loggers to prevent log spam and token exposure
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient.discovery").setLevel(logging.WARNING)
+logging.getLogger("google.auth.transport.requests").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
