@@ -1,5 +1,5 @@
 # main.py
-# This version uses a custom MongoPersistence class for robust, persistent storage.
+# This version includes the full owner and notice functionality.
 
 import asyncio
 import os
@@ -34,6 +34,7 @@ class MongoPersistence(BasePersistence):
         self.user_data_collection = self.db["user_data"]
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
+        self.notices_collection = self.db["notices"] # <-- Collection for notices
 
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
@@ -84,12 +85,10 @@ class MongoPersistence(BasePersistence):
 # SECTION 2: BOT AND WEB SERVER SETUP
 # ==============================================================================
 
-# Get the MongoDB URL from environment variables
 MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise ValueError("MONGO_URL environment variable not set!")
 
-# Use our new custom MongoPersistence class
 persistence = MongoPersistence(mongo_url=MONGO_URL)
 
 application = (
@@ -106,8 +105,9 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # ==============================================================================
 
 async def main_setup() -> None:
-    """Initializes the bot and its handlers."""
-    conv_handler = ConversationHandler(
+    """Initializes the bot and registers all handlers."""
+    # Conversation handler for the initial user setup (/start)
+    setup_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
             config.ASK_YEAR: [MessageHandler(filters.Regex(r"^(1st|2nd|3rd|4th) Year$"), h.received_year)],
@@ -118,13 +118,30 @@ async def main_setup() -> None:
         persistent=True,
         name="setup_conversation"
     )
-    application.add_handler(conv_handler)
+
+    # Conversation handler for posting notices (/postnotice)
+    notice_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("postnotice", h.post_notice_start)],
+        states={
+            h.AWAIT_NOTICE_FILE: [MessageHandler(filters.Document.ALL, h.receive_notice_file)],
+        },
+        fallbacks=[CommandHandler("cancel", h.cancel_notice)],
+        persistent=False,
+        name="notice_conversation"
+    )
+
+    # --- Register all handlers ---
+    application.add_handler(setup_conv_handler)
+    application.add_handler(notice_conv_handler)
+    
     application.add_handler(CommandHandler("help", h.help_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("notes", h.file_selection_command))
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
-    application.add_handler(CommandHandler("suggest", h.suggestion_command)) 
+    application.add_handler(CommandHandler("suggest", h.suggestion_command))
+    application.add_handler(CommandHandler("notice", h.get_notice_command))
+    
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
     # Initialize the application
