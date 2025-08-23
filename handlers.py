@@ -296,9 +296,10 @@ async def receive_notice_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     file_handle.seek(0)
 
     service = get_drive_service()
-    data_folder_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, "DATA")
+    data_folder_id = get_folder_id(service, config.SHARED_DRIVE_ID, "DATA")
+    
     if not data_folder_id:
-        await update.message.reply_text("❌ Error: The 'DATA' folder was not found in Google Drive.")
+        await update.message.reply_text("❌ Error: The 'DATA' folder was not found in your Shared Drive.")
         return ConversationHandler.END
 
     uploaded_file = upload_file(service, data_folder_id, doc.file_name, file_handle, doc.mime_type)
