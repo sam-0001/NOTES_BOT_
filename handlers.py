@@ -32,23 +32,33 @@ AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 
 # --- Conversation Handlers (/start) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
+
     if user_id in config.OWNER_IDS:
         await update.message.reply_text(
             f"👋 Welcome back, Admin {user_name}!\n\n"
             "You have access to all commands. Use /stats to see analytics."
         )
         return ConversationHandler.END
+
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
-            "Use /notes or /assignments. To change your details, use /reset first."
+            "Use /notes or /assignments. To see all commands, type /help."
         )
         return ConversationHandler.END
+
+    await update.message.reply_text(
+        f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
+        "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
+        "To get started, I just need a few details from you. First, please select your academic year."
+    )
+    
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
-        "👋 Welcome! Let's get you set up.\nFirst, please select your academic year.",
+        "Please select your academic year:",
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return config.ASK_YEAR
