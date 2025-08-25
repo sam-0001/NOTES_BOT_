@@ -30,21 +30,35 @@ from bot_helpers import owner_only, busy_lock, check_user_setup, send_wait_messa
 CHOOSING_STAT = 0
 
 # --- Conversation Handlers (for /start setup) ---
-# ... (The entire /start conversation: start, received_year, received_branch, received_name remains unchanged) ...
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation and asks for the user's year."""
+    """Greets owners specially and starts the setup for normal users."""
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+
+    # Check if the user is an owner first
+    if user_id in config.OWNER_IDS:
+        await update.message.reply_text(
+            f"👋 Welcome back, Admin {user_name}!\n\n"
+            "You have access to all commands. Use /stats to see analytics."
+        )
+        return ConversationHandler.END  # End the conversation immediately for owners
+
+    # --- Existing logic for normal users ---
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
             "Use /notes or /assignments. To change your details, use /reset first."
         )
         return ConversationHandler.END
+
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "👋 Welcome! Let's get you set up.\nFirst, please select your academic year.",
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return config.ASK_YEAR
+
 
 async def received_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['year'] = update.message.text
@@ -71,6 +85,7 @@ async def received_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data['available_branches'] = branch_names
     return config.ASK_BRANCH
 
+
 async def received_branch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_branch = update.message.text
     if user_branch not in context.user_data.get('available_branches', []):
@@ -83,6 +98,7 @@ async def received_branch(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     return config.ASK_NAME
 
+
 async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['name'] = update.message.text.strip()
     await update.message.reply_text(
@@ -91,6 +107,7 @@ async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if 'available_branches' in context.user_data:
         del context.user_data['available_branches']
     return ConversationHandler.END
+
 
 # --- Standard Command Handlers ---
 
@@ -116,14 +133,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         help_text += admin_text
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (code is unchanged) ...
     user_name = context.user_data.get('name', 'there')
     context.user_data.clear()
     await update.message.reply_text(f"Okay {user_name}, I've cleared your data. Please use /start to set up again.")
 
+
 async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (code is unchanged) ...
     if check_user_setup(context.user_data):
         greeting = f"{random.choice(config.GREETINGS)}, {context.user_data['name']}!"
         text = (
@@ -137,7 +154,6 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def suggestion_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (code is unchanged) ...
     suggestion_text = (
         "Thank you for using our bot! We are always looking to improve and "
         "your feedback is invaluable to us. 😊\n\n"
@@ -155,7 +171,6 @@ async def suggestion_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @busy_lock
 async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (code is unchanged) ...
     if not check_user_setup(context.user_data):
         await update.message.reply_text("Please run /start first to set up your profile.")
         return
@@ -188,8 +203,6 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
         f"Please select a subject to get {command_type}:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
-# --- NEW Notice Command ---
 
 async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetches and displays the most recent file from the 'DATA' folder in GDrive."""
@@ -232,7 +245,7 @@ async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="Markdown"
     )
 
-# --- NEW Admin Stats Command ---
+# --- Admin Stats Command ---
 
 @owner_only
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -293,17 +306,16 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
     return ConversationHandler.END
 
-# --- UPDATED Callback Query Handler ---
+# --- General Callback Query Handler ---
 
 @busy_lock
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles all inline button presses."""
+    """Handles all non-stats inline button presses."""
     query = update.callback_query
     await query.answer()
     
-    # Check if this is a stats callback first
     if query.data.startswith("stats_"):
-        # This will be handled by the stats_conv_handler, so we can ignore it here
+        # This is handled by the stats_callback_handler, so we do nothing here.
         return
         
     data_parts = query.data.split(":", 3)
