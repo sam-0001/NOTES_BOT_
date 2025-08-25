@@ -1,5 +1,5 @@
 # main.py
-# This version includes the full owner and notice functionality.
+# This version includes the simplified notice system and new admin analytics.
 
 import asyncio
 import os
@@ -34,7 +34,7 @@ class MongoPersistence(BasePersistence):
         self.user_data_collection = self.db["user_data"]
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
-        self.notices_collection = self.db["notices"] # <-- Collection for notices
+        self.access_logs_collection = self.db["access_logs"] # <-- For analytics
 
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
@@ -66,7 +66,6 @@ class MongoPersistence(BasePersistence):
     async def flush(self):
         pass
     
-    # Methods required by newer PTB versions
     async def drop_chat_data(self, chat_id: int): 
         self.chat_data_collection.delete_one({"_id": chat_id})
     
@@ -119,20 +118,20 @@ async def main_setup() -> None:
         name="setup_conversation"
     )
 
-    # Conversation handler for posting notices (/postnotice)
-    notice_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("postnotice", h.post_notice_start)],
+    # NEW: Conversation handler for admin stats (/stats)
+    stats_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("stats", h.stats_command)],
         states={
-            h.AWAIT_NOTICE_FILE: [MessageHandler(filters.Document.ALL, h.receive_notice_file)],
+            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)]
         },
-        fallbacks=[CommandHandler("cancel", h.cancel_notice)],
+        fallbacks=[CommandHandler("stats", h.stats_command)],
         persistent=False,
-        name="notice_conversation"
+        name="stats_conversation"
     )
 
     # --- Register all handlers ---
     application.add_handler(setup_conv_handler)
-    application.add_handler(notice_conv_handler)
+    application.add_handler(stats_conv_handler)
     
     application.add_handler(CommandHandler("help", h.help_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
@@ -142,6 +141,7 @@ async def main_setup() -> None:
     application.add_handler(CommandHandler("suggest", h.suggestion_command))
     application.add_handler(CommandHandler("notice", h.get_notice_command))
     
+    # The general button handler must be last
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
     # Initialize the application
