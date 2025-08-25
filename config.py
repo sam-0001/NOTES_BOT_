@@ -10,8 +10,12 @@ load_dotenv()
 # --- Essential Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
+SHARED_DRIVE_ID = os.getenv("SHARED_DRIVE_ID")
 SERVICE_ACCOUNT_ENV = os.getenv("SERVICE_ACCOUNT_JSON")
 OWNER_IDS = [int(id) for id in os.getenv("OWNER_IDS", "").split(',') if id]
+
+# ADD THIS LINE to load the feedback group ID
+FEEDBACK_GROUP_ID = int(os.getenv("FEEDBACK_GROUP_ID", 0))
 
 
 # --- Bot Settings ---
@@ -27,7 +31,6 @@ GREETINGS = [
 ASK_YEAR, ASK_BRANCH, ASK_NAME = range(3)
 
 # --- Logging Setup ---
-# The format string below has been corrected to be on a single line
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
