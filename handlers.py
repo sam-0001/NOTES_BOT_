@@ -132,10 +132,31 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         help_text += admin_text
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+# In handlers.py
+
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_name = context.user_data.get('name', 'there')
+    """Clears user data from the bot's temporary memory and the MongoDB database."""
+    user_id = update.effective_user.id
+    user_name = context.user_data.get('name', 'there') # Get name before clearing
+
+    # Clear the temporary data in the bot's memory
     context.user_data.clear()
-    await update.message.reply_text(f"Okay {user_name}, I've cleared your data. Please use /start to set up again.")
+
+    # --- ADD THIS BLOCK TO DELETE FROM MONGODB ---
+    # Access the database collection via the application's persistence object
+    db = context.application.persistence.db
+    result = db["user_data"].delete_one({"_id": user_id})
+
+    if result.deleted_count > 0:
+        config.logger.info(f"Successfully deleted user {user_id} from MongoDB.")
+    else:
+        config.logger.warning(f"User {user_id} was not found in MongoDB to delete.")
+    # --- END OF BLOCK ---
+
+    await update.message.reply_text(
+        f"Okay {user_name}, I've completely cleared your data. "
+        "Please use /start to set up your profile again."
+    )
 
 async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if check_user_setup(context.user_data):
