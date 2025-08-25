@@ -1,5 +1,5 @@
 # main.py
-# This version includes the simplified notice system and new admin analytics.
+# This version includes all free features like leaderboard, in-app suggestions, and admin alerts.
 
 import asyncio
 import os
@@ -34,7 +34,7 @@ class MongoPersistence(BasePersistence):
         self.user_data_collection = self.db["user_data"]
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
-        self.access_logs_collection = self.db["access_logs"] # <-- For analytics
+        self.access_logs_collection = self.db["access_logs"]
 
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
@@ -66,6 +66,7 @@ class MongoPersistence(BasePersistence):
     async def flush(self):
         pass
     
+    # Methods required by newer PTB versions
     async def drop_chat_data(self, chat_id: int): 
         self.chat_data_collection.delete_one({"_id": chat_id})
     
@@ -118,7 +119,7 @@ async def main_setup() -> None:
         name="setup_conversation"
     )
 
-    # NEW: Conversation handler for admin stats (/stats)
+    # Conversation handler for admin stats (/stats)
     stats_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("stats", h.stats_command)],
         states={
@@ -129,19 +130,32 @@ async def main_setup() -> None:
         name="stats_conversation"
     )
 
+    # Conversation handler for in-app feedback (/suggest)
+    feedback_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("suggest", h.suggestion_start)],
+        states={
+            h.AWAIT_FEEDBACK_BUTTON: [CallbackQueryHandler(h.prompt_for_feedback, pattern="^leave_feedback$")],
+            h.AWAIT_FEEDBACK_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.receive_feedback)],
+        },
+        fallbacks=[CommandHandler("cancel", h.cancel_feedback)],
+        persistent=False,
+        name="feedback_conversation"
+    )
+
     # --- Register all handlers ---
     application.add_handler(setup_conv_handler)
     application.add_handler(stats_conv_handler)
+    application.add_handler(feedback_conv_handler)
     
     application.add_handler(CommandHandler("help", h.help_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("notes", h.file_selection_command))
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
-    application.add_handler(CommandHandler("suggest", h.suggestion_command))
     application.add_handler(CommandHandler("notice", h.get_notice_command))
+    application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
     
-    # The general button handler must be last
+    # The general button handler for notes/assignments must be last
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
     # Initialize the application
