@@ -33,25 +33,30 @@ CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = ra
 
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
+
     if user_id in config.OWNER_IDS:
         await update.message.reply_text(
             f"👋 Welcome back, Admin {user_name}!\n\n"
             "You have access to all admin commands. Use /help to see the list."
         )
         return ConversationHandler.END
+
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
             "Use /notes or /assignments. To see all commands, type /help."
         )
         return ConversationHandler.END
+
     await update.message.reply_text(
         f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
         "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
         "To get started, let's set up your profile."
     )
+    
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "Please select your academic year:",
@@ -237,11 +242,15 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
             return
         subjects = list_items(service, branch_id, "folders")
         if not subjects:
-            await update.message.reply_text("No subjects found for your branch.")
+            await update.message.reply_text("No valid subjects found for your branch.")
+            return
+        valid_subjects = [s for s in subjects if s.get("name")]
+        if not valid_subjects:
+            await update.message.reply_text("No valid subjects found for your branch.")
             return
         keyboard = [
             [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{s['name']}:{command_type}")]
-            for s in subjects
+            for s in valid_subjects
         ]
         await update.message.reply_text(
             f"Please select a subject to get {command_type}:", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -294,9 +303,10 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if query.data == "stats_quick":
         await query.edit_message_text("Gathering stats, please wait...")
         total_users = db["user_data"].count_documents({})
+        monthly_users = db["user_data"].count_documents({"created_at": {"$gte": datetime(datetime.utcnow().year, datetime.utcnow().month, 1)}})
         pipeline = [{"$group": {"_id": "$subject_name", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 5}]
         trending_subjects = list(db["access_logs"].aggregate(pipeline))
-        stats_text = f"📊 *Quick Bot Analytics*\n\n👥 *Total Registered Users:* {total_users}\n\n📈 *Trending Subjects (by clicks):*\n"
+        stats_text = f"📊 *Quick Bot Analytics*\n\n👥 *Total Registered Users:* {total_users}\n📈 *New Users This Month:* {monthly_users}\n\n📚 *Trending Subjects (by clicks):*\n"
         if trending_subjects:
             for i, subject in enumerate(trending_subjects):
                 stats_text += f"{i+1}. {subject['_id']} ({subject['count']} clicks)\n"
@@ -392,7 +402,7 @@ async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_
     target = query.data
     if target == "broadcast_all":
         context.user_data['broadcast_target'] = {"all": True}
-        await query.edit_message_text("Please send the message you want to broadcast to all users.")
+        await query.edit_message_text("Please send the message you want to broadcast to all users. Type /cancel to quit.")
         return AWAITING_MESSAGE
     elif target == "broadcast_specific":
         context.user_data['broadcast_target'] = {}
@@ -502,6 +512,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text=f"Select a file from '{subject_name}':", reply_markup=InlineKeyboardMarkup(keyboard)
         )
     elif action == 'dl':
+        # Award points for leaderboard
         context.application.persistence.db["user_data"].update_one(
             {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
         )
