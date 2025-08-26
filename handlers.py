@@ -4,7 +4,7 @@ import io
 import random
 import asyncio
 import pandas as pd
-from datetime importdatetime
+from datetime import datetime
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
