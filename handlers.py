@@ -31,33 +31,27 @@ CHOOSING_STAT = 0
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 
-
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
     if user_id in config.OWNER_IDS:
         await update.message.reply_text(
             f"👋 Welcome back, Admin {user_name}!\n\n"
             "You have access to all admin commands. Use /help to see the list."
         )
         return ConversationHandler.END
-
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
             "Use /notes or /assignments. To see all commands, type /help."
         )
         return ConversationHandler.END
-
     await update.message.reply_text(
         f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
         "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
         "To get started, let's set up your profile."
     )
-    
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "Please select your academic year:",
@@ -224,7 +218,34 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
         if not check_user_setup(context.user_data):
             await update.message.reply_text("Please run /start first to set up your profile.")
             return
-        # ... (rest of function as before)
+        greeting = f"{random.choice(config.GREETINGS)}, {context.user_data['name']}!"
+        await update.message.reply_text(greeting)
+        command_type = 'notes' if update.message.text.startswith('/notes') else 'assignments'
+        year_folder_name = context.user_data['year'].replace(" ", "_")
+        branch_name = context.user_data['branch']
+        service = get_drive_service()
+        if not service:
+            await update.message.reply_text("Could not connect to Google Drive right now.")
+            return
+        year_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
+        if not year_id:
+            await update.message.reply_text("Could not find your year folder on Drive.")
+            return
+        branch_id = get_folder_id(service, year_id, branch_name)
+        if not branch_id:
+            await update.message.reply_text("Could not find your branch folder on Drive.")
+            return
+        subjects = list_items(service, branch_id, "folders")
+        if not subjects:
+            await update.message.reply_text("No subjects found for your branch.")
+            return
+        keyboard = [
+            [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{s['name']}:{command_type}")]
+            for s in subjects
+        ]
+        await update.message.reply_text(
+            f"Please select a subject to get {command_type}:", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     except Exception as e:
         config.logger.error(f"Error in file_selection_command: {e}")
         await update.message.reply_text("❗️ An error occurred while communicating with Google Drive. Please try again later.")
@@ -303,10 +324,61 @@ async def admin_get_files_command(update: Update, context: ContextTypes.DEFAULT_
     command_type = "notes" if is_notes else "assignments"
     command_name = "/getnotes" if is_notes else "/getassignments"
     args = context.args
-    if not args:
-        await update.message.reply_text(f"Usage: `{command_name} <Year> <Branch> [Subject]`", parse_mode="Markdown")
+    if len(args) == 0:
+        await update.message.reply_text(
+            f"Please provide arguments.\n\nUsage:\n`{command_name} <Year> <Branch> [Subject]`\n\n"
+            "Example:\n`/getnotes 2nd_Year Computer DSA`",
+            parse_mode="Markdown"
+        )
         return
-    # ... (rest of logic as before)
+    service = get_drive_service()
+    if not service:
+        await update.message.reply_text("Could not connect to Google Drive.")
+        return
+    try:
+        year_name = args[0]
+        year_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_name)
+        if not year_id:
+            await update.message.reply_text(f"Year '{year_name}' not found.")
+            return
+        if len(args) == 1:
+            branches = list_items(service, year_id, "folders")
+            branch_names = "\n".join([f"- `{b['name']}`" for b in branches])
+            await update.message.reply_text(f"Branches in {year_name}:\n{branch_names}", parse_mode="Markdown")
+            return
+        branch_name = args[1]
+        branch_id = get_folder_id(service, year_id, branch_name)
+        if not branch_id:
+            await update.message.reply_text(f"Branch '{branch_name}' not found in '{year_name}'.")
+            return
+        if len(args) == 2:
+            subjects = list_items(service, branch_id, "folders")
+            subject_names = "\n".join([f"- `{s['name']}`" for s in subjects])
+            await update.message.reply_text(f"Subjects in {year_name}, {branch_name}:\n{subject_names}", parse_mode="Markdown")
+            return
+        subject_name = args[2]
+        subject_id = get_folder_id(service, branch_id, subject_name)
+        if not subject_id:
+            await update.message.reply_text(f"Subject '{subject_name}' not found.")
+            return
+        subfolder_name = "Notes" if is_notes else "Assignments"
+        target_folder_id = get_folder_id(service, subject_id, subfolder_name)
+        if not target_folder_id:
+            await update.message.reply_text(f"The '{subfolder_name}' folder for '{subject_name}' doesn't exist.")
+            return
+        files = list_items(service, target_folder_id, "files")
+        if not files:
+            await update.message.reply_text(f"No {command_type} found for '{subject_name}'.")
+            return
+        await update.message.reply_text(f"Found {len(files)} {command_type} for '{subject_name}'. Sending them now...")
+        for file_item in files:
+            file_content = download_file(service, file_item['id'])
+            if file_content:
+                await update.message.reply_document(document=file_content, filename=file_item['name'])
+            await asyncio.sleep(1)
+    except Exception as e:
+        config.logger.error(f"Error in admin_get_files_command: {e}")
+        await update.message.reply_text("An error occurred. Please check your arguments and try again.")
 
 @owner_only
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -315,36 +387,124 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CHOOSING_BROADCAST_TARGET
 
 async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (logic as before)
+    query = update.callback_query
+    await query.answer()
+    target = query.data
+    if target == "broadcast_all":
+        context.user_data['broadcast_target'] = {"all": True}
+        await query.edit_message_text("Please send the message you want to broadcast to all users.")
+        return AWAITING_MESSAGE
+    elif target == "broadcast_specific":
+        context.user_data['broadcast_target'] = {}
+        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
+        await query.message.reply_text("Please select the target year.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+        await query.delete_message()
+        return AWAITING_YEAR
 
 async def broadcast_year_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (logic as before)
+    year = update.message.text
+    context.user_data['broadcast_target']['year'] = year
+    service = get_drive_service()
+    year_folder_name = year.replace(" ", "_")
+    year_folder_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
+    branches = list_items(service, year_folder_id, "folders")
+    branch_names = [b['name'] for b in branches]
+    reply_keyboard = [branch_names[i:i + 2] for i in range(0, len(branch_names), 2)]
+    await update.message.reply_text("Now, please select the target branch.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return AWAITING_BRANCH
 
 async def broadcast_branch_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (logic as before)
+    branch = update.message.text
+    context.user_data['broadcast_target']['branch'] = branch
+    await update.message.reply_text(
+        f"Target set to: {context.user_data['broadcast_target']['year']}, {branch}.\n\n"
+        "Now, please send the message to broadcast (text, image with caption, or document with caption).",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return AWAITING_MESSAGE
 
 async def broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (logic as before)
+    target_criteria = context.user_data.get('broadcast_target', {})
+    message = update.message
+    await update.message.reply_text("Finding users and preparing to broadcast...")
+    query = {}
+    if not target_criteria.get("all", False):
+        query["data.year"] = target_criteria.get("year")
+        query["data.branch"] = target_criteria.get("branch")
+    db = context.application.persistence.db
+    target_users = list(db["user_data"].find(query, {"_id": 1}))
+    user_ids = [user["_id"] for user in target_users]
+    if not user_ids:
+        await update.message.reply_text("No users found matching the criteria. Broadcast cancelled.")
+        return ConversationHandler.END
+    await update.message.reply_text(f"Found {len(user_ids)} users. Starting broadcast... This may take some time.")
+    success_count = 0
+    fail_count = 0
+    for user_id in user_ids:
+        try:
+            await message.forward(chat_id=user_id)
+            success_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            fail_count += 1
+            config.logger.error(f"Failed to send broadcast to {user_id}: {e}")
+    await update.message.reply_text(
+        f"Broadcast complete!\n\n✅ Sent successfully to {success_count} users.\n"
+        f"❌ Failed to send to {fail_count} users (they may have blocked the bot)."
+    )
+    if 'broadcast_target' in context.user_data:
+        del context.user_data['broadcast_target']
+    return ConversationHandler.END
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (logic as before)
+    if 'broadcast_target' in context.user_data:
+        del context.user_data['broadcast_target']
+    await update.message.reply_text("Broadcast cancelled.")
+    return ConversationHandler.END
 
 # --- General Callback Query Handler ---
 @busy_lock
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    if query.data.startswith("stats_"): return
+    if query.data.startswith("stats_"):
+        return
         
     data_parts = query.data.split(":", 3)
     action = data_parts[0]
     
     if action == 'subj':
         subject_id, subject_name, command_type = data_parts[1], data_parts[2], data_parts[3]
-        context.application.persistence.db["access_logs"].insert_one({"user_id": query.from_user.id, "subject_name": subject_name, "type": command_type, "timestamp": datetime.utcnow()})
-        # ... (rest of 'subj' logic)
+        context.application.persistence.db["access_logs"].insert_one({
+            "user_id": query.from_user.id,
+            "subject_name": subject_name,
+            "type": command_type,
+            "timestamp": datetime.utcnow()
+        })
+        service = get_drive_service()
+        if not service:
+            await query.edit_message_text("Could not connect to Google Drive right now.")
+            return
+        subfolder_name = "Notes" if command_type == "notes" else "Assignments"
+        target_folder_id = get_folder_id(service, subject_id, subfolder_name)
+        if not target_folder_id:
+            await query.edit_message_text(f"The '{subfolder_name}' folder for '{subject_name}' doesn't exist.")
+            return
+        files = list_items(service, target_folder_id, "files")
+        if not files:
+            await query.edit_message_text(f"No {command_type} found for '{subject_name}'.")
+            return
+        keyboard = [
+            [InlineKeyboardButton(f['name'], callback_data=f"dl:{f['id']}:{f['name']}")]
+            for f in files
+        ]
+        await query.edit_message_text(
+            text=f"Select a file from '{subject_name}':", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     elif action == 'dl':
-        context.application.persistence.db["user_data"].update_one({"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True)
+        context.application.persistence.db["user_data"].update_one(
+            {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
+        )
         file_id, file_name = data_parts[1], data_parts[2]
         await query.edit_message_text(text=f"⬇️ Preparing to download '{file_name}'...")
         wait_task = asyncio.create_task(send_wait_message(context, query.message.chat.id))
