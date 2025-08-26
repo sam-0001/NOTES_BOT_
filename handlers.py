@@ -31,6 +31,7 @@ CHOOSING_STAT = 0
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 
+
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Greets owners and starts the setup for normal users with an intro."""
@@ -219,7 +220,7 @@ async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 @rate_limit(limit_seconds=10, max_calls=2)
 @busy_lock
 async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles /notes and /assignments with robust error recovery."""
+    """Handles /notes and /assignments with robust error recovery and callback data handling."""
     try:
         if not check_user_setup(context.user_data):
             await update.message.reply_text("Please run /start first to set up your profile.")
@@ -227,8 +228,7 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
 
         greeting = f"{random.choice(config.GREETINGS)}, {context.user_data['name']}!"
         await update.message.reply_text(greeting)
-
-        # Attempt to connect to Google Drive first
+        
         service = get_drive_service()
         if not service:
             await update.message.reply_text("Could not connect to Google Drive at the moment. Please try again later.")
@@ -254,10 +254,17 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("No subjects found for your branch.")
             return
 
+        # --- MODIFIED PART TO PREVENT Button_data_invalid ---
+        # Temporarily store the names to avoid putting them in callback_data
+        subject_names_map = {s['id']: s['name'] for s in valid_subjects}
+        context.user_data['last_subject_names'] = subject_names_map
+
+        # Create buttons with shorter callback_data
         keyboard = [
-            [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{s['name']}:{command_type}")]
+            [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{command_type}")]
             for s in valid_subjects
         ]
+        
         await update.message.reply_text(
             f"Please select a subject to get {command_type}:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -265,6 +272,7 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         config.logger.error(f"Error in file_selection_command: {e}")
         await update.message.reply_text("❗️ An error occurred. Please try again later.")
+
 
 @rate_limit(limit_seconds=5, max_calls=1)
 async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -487,11 +495,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if query.data.startswith("stats_"):
         return
         
-    data_parts = query.data.split(":", 3)
+    data_parts = query.data.split(":")
     action = data_parts[0]
     
     if action == 'subj':
-        subject_id, subject_name, command_type = data_parts[1], data_parts[2], data_parts[3]
+        subject_id = data_parts[1]
+        command_type = data_parts[2]
+        subject_name = context.user_data.get('last_subject_names', {}).get(subject_id)
+        if not subject_name:
+            await query.edit_message_text("Sorry, something went wrong. Please try the command again.")
+            return
+            
         context.application.persistence.db["access_logs"].insert_one({
             "user_id": query.from_user.id,
             "subject_name": subject_name,
