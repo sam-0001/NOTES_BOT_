@@ -1,5 +1,4 @@
 # main.py
-# This version includes all free features like leaderboard, in-app suggestions, and admin alerts.
 
 import asyncio
 import os
@@ -22,11 +21,8 @@ from pymongo import MongoClient
 import config
 import handlers as h
 
-# ==============================================================================
-# SECTION 1: CUSTOM MONGODB PERSISTENCE CLASS
-# ==============================================================================
+# --- Custom MongoDB Persistence Class ---
 class MongoPersistence(BasePersistence):
-    """A custom persistence class that uses MongoDB Atlas for storage."""
     def __init__(self, mongo_url: str, db_name: str = "telegram_bot_db"):
         super().__init__()
         self.client = MongoClient(mongo_url)
@@ -49,30 +45,17 @@ class MongoPersistence(BasePersistence):
         return {doc["_id"]: doc.get("data", {}) for doc in all_docs}
 
     async def update_bot_data(self, data):
-        self.bot_data_collection.update_one(
-            {"_id": "bot_data_singleton"}, {"$set": {"data": data}}, upsert=True
-        )
+        self.bot_data_collection.update_one({"_id": "bot_data_singleton"}, {"$set": {"data": data}}, upsert=True)
 
     async def update_chat_data(self, chat_id: int, data):
-        self.chat_data_collection.update_one(
-            {"_id": chat_id}, {"$set": {"data": data}}, upsert=True
-        )
+        self.chat_data_collection.update_one({"_id": chat_id}, {"$set": {"data": data}}, upsert=True)
 
     async def update_user_data(self, user_id: int, data):
-        self.user_data_collection.update_one(
-            {"_id": user_id}, {"$set": {"data": data}}, upsert=True
-        )
+        self.user_data_collection.update_one({"_id": user_id}, {"$set": {"data": data}}, upsert=True)
         
-    async def flush(self):
-        pass
-    
-    # Methods required by newer PTB versions
-    async def drop_chat_data(self, chat_id: int): 
-        self.chat_data_collection.delete_one({"_id": chat_id})
-    
-    async def drop_user_data(self, user_id: int): 
-        self.user_data_collection.delete_one({"_id": user_id})
-
+    async def flush(self): pass
+    async def drop_chat_data(self, chat_id: int): self.chat_data_collection.delete_one({"_id": chat_id})
+    async def drop_user_data(self, user_id: int): self.user_data_collection.delete_one({"_id": user_id})
     async def get_callback_data(self): return None
     async def get_conversations(self, name: str): return {}
     async def refresh_bot_data(self, bot_data): await self.update_bot_data(bot_data)
@@ -81,90 +64,74 @@ class MongoPersistence(BasePersistence):
     async def update_callback_data(self, data): pass
     async def update_conversation(self, name: str, key, new_state): pass
 
-# ==============================================================================
-# SECTION 2: BOT AND WEB SERVER SETUP
-# ==============================================================================
-
+# --- Bot and Web Server Setup ---
 MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise ValueError("MONGO_URL environment variable not set!")
 
 persistence = MongoPersistence(mongo_url=MONGO_URL)
-
-application = (
-    Application.builder()
-    .token(config.TELEGRAM_BOT_TOKEN)
-    .persistence(persistence)
-    .build()
-)
-
+application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).persistence(persistence).build()
 app = FastAPI(docs_url=None, redoc_url=None)
 
-# ==============================================================================
-# SECTION 3: MAIN BOT LOGIC & WEBHOOKS
-# ==============================================================================
-
+# --- Main Bot Logic & Webhooks ---
 async def main_setup() -> None:
     """Initializes the bot and registers all handlers."""
-    # Conversation handler for the initial user setup (/start)
-    setup_conv_handler = ConversationHandler(
+    # Conversation handlers
+    setup_conv = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
             config.ASK_YEAR: [MessageHandler(filters.Regex(r"^(1st|2nd|3rd|4th) Year$"), h.received_year)],
             config.ASK_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_branch)],
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
-        fallbacks=[CommandHandler("start", h.start)],
-        persistent=True,
-        name="setup_conversation"
+        fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
     )
-
-    # Conversation handler for admin stats (/stats)
-    stats_conv_handler = ConversationHandler(
+    stats_conv = ConversationHandler(
         entry_points=[CommandHandler("stats", h.stats_command)],
-        states={
-            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)]
-        },
-        fallbacks=[CommandHandler("stats", h.stats_command)],
-        persistent=False,
-        name="stats_conversation"
+        states={h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)]},
+        fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
     )
-
-    # Conversation handler for in-app feedback (/suggest)
-    feedback_conv_handler = ConversationHandler(
+    feedback_conv = ConversationHandler(
         entry_points=[CommandHandler("suggest", h.suggestion_start)],
         states={
             h.AWAIT_FEEDBACK_BUTTON: [CallbackQueryHandler(h.prompt_for_feedback, pattern="^leave_feedback$")],
             h.AWAIT_FEEDBACK_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.receive_feedback)],
         },
-        fallbacks=[CommandHandler("cancel", h.cancel_feedback)],
-        persistent=False,
-        name="feedback_conversation"
+        fallbacks=[CommandHandler("cancel", h.cancel_feedback)], persistent=False, name="feedback_conv"
+    )
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", h.broadcast_start)],
+        states={
+            h.CHOOSING_BROADCAST_TARGET: [CallbackQueryHandler(h.broadcast_target_chosen)],
+            h.AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.broadcast_year_received)],
+            h.AWAITING_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.broadcast_branch_received)],
+            h.AWAITING_MESSAGE: [MessageHandler(filters.ALL & ~filters.COMMAND, h.broadcast_message_received)],
+        },
+        fallbacks=[CommandHandler("cancel", h.cancel_broadcast)], persistent=False, name="broadcast_conv"
     )
 
-    # --- Register all handlers ---
-    application.add_handler(setup_conv_handler)
-    application.add_handler(stats_conv_handler)
-    application.add_handler(feedback_conv_handler)
+    # Register all handlers
+    application.add_handler(setup_conv)
+    application.add_handler(stats_conv)
+    application.add_handler(feedback_conv)
+    application.add_handler(broadcast_conv)
     
     application.add_handler(CommandHandler("help", h.help_command))
-    application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("reset", h.reset_command))
+    application.add_handler(CommandHandler("myinfo", h.myinfo_command))
+    application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
+    application.add_handler(CommandHandler("notice", h.get_notice_command))
     application.add_handler(CommandHandler("notes", h.file_selection_command))
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
-    application.add_handler(CommandHandler("notice", h.get_notice_command))
-    application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
+    application.add_handler(CommandHandler("getnotes", h.admin_get_files_command))
+    application.add_handler(CommandHandler("getassignments", h.admin_get_files_command))
     
-    # The general button handler for notes/assignments must be last
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
-    # Initialize the application
     await application.initialize()
     await application.start()
 
-    # --- Webhook Logic for Render ---
     webhook_base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("LOCAL_WEBHOOK_URL")
-
     if webhook_base_url:
         webhook_url = f"{webhook_base_url}/webhook"
         await application.bot.set_webhook(url=webhook_url)
@@ -174,7 +141,6 @@ async def main_setup() -> None:
 
 @app.post("/webhook")
 async def webhook(request: Request) -> None:
-    """Handles incoming updates from Telegram."""
     try:
         update_data = await request.json()
         update = Update.de_json(data=update_data, bot=application.bot)
@@ -183,11 +149,6 @@ async def webhook(request: Request) -> None:
         config.logger.error(f"Error processing update: {e}")
 
 @app.on_event("startup")
-async def on_startup():
-    """Runs the bot initialization when the server starts."""
-    await main_setup()
-
+async def on_startup(): await main_setup()
 @app.on_event("shutdown")
-async def on_shutdown():
-    """Stops the bot gracefully when the server shuts down."""
-    await application.stop()
+async def on_shutdown(): await application.stop()
