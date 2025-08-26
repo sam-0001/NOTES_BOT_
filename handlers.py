@@ -216,49 +216,35 @@ async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 # --- Core File & Notice Functionality ---
+
 @rate_limit(limit_seconds=10, max_calls=2)
 @busy_lock
 async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        if not check_user_setup(context.user_data):
-            await update.message.reply_text("Please run /start first to set up your profile.")
-            return
-        greeting = f"{random.choice(config.GREETINGS)}, {context.user_data['name']}!"
-        await update.message.reply_text(greeting)
-        command_type = 'notes' if update.message.text.startswith('/notes') else 'assignments'
-        year_folder_name = context.user_data['year'].replace(" ", "_")
-        branch_name = context.user_data['branch']
-        service = get_drive_service()
-        if not service:
-            await update.message.reply_text("Could not connect to Google Drive right now.")
-            return
-        year_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
-        if not year_id:
-            await update.message.reply_text("Could not find your year folder on Drive.")
-            return
-        branch_id = get_folder_id(service, year_id, branch_name)
-        if not branch_id:
-            await update.message.reply_text("Could not find your branch folder on Drive.")
-            return
+        # ... (existing code to get to this point) ...
+        
         subjects = list_items(service, branch_id, "folders")
         if not subjects:
-            await update.message.reply_text("No valid subjects found for your branch.")
+            await update.message.reply_text("No subjects found for your branch.")
             return
+
+        # --- ADD THIS CHECK to filter out folders with no name ---
         valid_subjects = [s for s in subjects if s.get("name")]
         if not valid_subjects:
             await update.message.reply_text("No valid subjects found for your branch.")
             return
+
         keyboard = [
             [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{s['name']}:{command_type}")]
-            for s in valid_subjects
+            for s in valid_subjects # Use the filtered list here
         ]
         await update.message.reply_text(
-            f"Please select a subject to get {command_type}:", reply_markup=InlineKeyboardMarkup(keyboard)
+            f"Please select a subject to get {command_type}:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except Exception as e:
         config.logger.error(f"Error in file_selection_command: {e}")
         await update.message.reply_text("❗️ An error occurred while communicating with Google Drive. Please try again later.")
-
 @rate_limit(limit_seconds=5, max_calls=1)
 async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
