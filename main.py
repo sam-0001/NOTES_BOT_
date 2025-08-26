@@ -70,7 +70,17 @@ if not MONGO_URL:
     raise ValueError("MONGO_URL environment variable not set!")
 
 persistence = MongoPersistence(mongo_url=MONGO_URL)
-application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).persistence(persistence).build()
+
+# --- UPDATED APPLICATION BUILDER WITH TIMEOUTS ---
+application = (
+    Application.builder()
+    .token(config.TELEGRAM_BOT_TOKEN)
+    .persistence(persistence)
+    .connect_timeout(30)  # Time to establish a connection
+    .read_timeout(30)     # Time to wait for a response
+    .build()
+)
+
 app = FastAPI(docs_url=None, redoc_url=None)
 
 # --- Main Bot Logic & Webhooks ---
