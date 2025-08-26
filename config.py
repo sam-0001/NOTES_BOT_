@@ -13,8 +13,6 @@ GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
 SHARED_DRIVE_ID = os.getenv("SHARED_DRIVE_ID")
 SERVICE_ACCOUNT_ENV = os.getenv("SERVICE_ACCOUNT_JSON")
 OWNER_IDS = [int(id) for id in os.getenv("OWNER_IDS", "").split(',') if id]
-
-# ADD THIS LINE to load the feedback group ID
 FEEDBACK_GROUP_ID = int(os.getenv("FEEDBACK_GROUP_ID", 0))
 
 
@@ -35,9 +33,14 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-# Silence noisy library loggers
+# Silence noisy httpx logger
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("googleapiclient.discovery").setLevel(logging.WARNING)
-logging.getLogger("google.auth.transport.requests").setLevel(logging.WARNING)
+
+# --- TEMPORARILY ENABLE DEBUG LOGS FOR GOOGLE ---
+# This will show detailed API request/response info.
+# Remember to change this back to logging.WARNING after debugging.
+logging.getLogger("googleapiclient.discovery").setLevel(logging.DEBUG)
+logging.getLogger("google.auth.transport.requests").setLevel(logging.DEBUG)
+# --- END OF DEBUG SECTION ---
 
 logger = logging.getLogger(__name__)
