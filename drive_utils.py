@@ -38,21 +38,33 @@ def get_drive_service():
 
 
 def get_folder_id(service, parent_id, folder_name):
+    """Finds a folder's ID by name within a parent folder using a direct query."""
     try:
         query = (
-            f"'{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' "
-            "and trashed = false"
+            f"'{parent_id}' in parents and "
+            f"mimeType = 'application/vnd.google-apps.folder' and "
+            f"name = '{folder_name}' and "
+            f"trashed = false"
         )
+        logger.info(f"Searching for folder with query: {query}")
+        
         results = service.files().list(
-            q=query, 
+            q=query,
             fields="files(id, name)",
-            supportsAllDrives=True,  # <-- Required for Shared Drives
-            includeItemsFromAllDrives=True  # <-- Required for Shared Drives
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora="allDrives"
         ).execute()
+        
+        logger.info(f"Google Drive API response for '{folder_name}': {results}")
         items = results.get('files', [])
-        for item in items:
-            if item['name'].lower() == folder_name.lower():
-                return item['id']
+        
+        if items:
+            return items[0]['id']
+        else:
+            logger.warning(f"Folder '{folder_name}' not found inside parent '{parent_id}'.")
+            return None
+            
     except HttpError as e:
         logger.error(f"An error occurred while searching for folder '{folder_name}': {e}")
     return None
@@ -70,8 +82,8 @@ def list_items(service, parent_id, item_type="folders"):
             q=query, 
             pageSize=100, 
             fields="files(id, name)",
-            supportsAllDrives=True, # <-- Required for Shared Drives
-            includeItemsFromAllDrives=True # <-- Required for Shared Drives
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
         return results.get('files', [])
     except HttpError as e:
@@ -81,7 +93,7 @@ def list_items(service, parent_id, item_type="folders"):
 
 def download_file(service, file_id):
     try:
-        request = service.files().get_media(fileId=file_id, supportsAllDrives=True) # <-- Required for Shared Drives
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
         file_handle = io.BytesIO()
         downloader = MediaIoBaseDownload(file_handle, request)
         done = False
@@ -102,9 +114,30 @@ def upload_file(service, folder_id, file_name, file_handle, mimetype='applicatio
             body=file_metadata, 
             media_body=media, 
             fields='id, webViewLink',
-            supportsAllDrives=True # <-- Required for Shared Drives
+            supportsAllDrives=True
         ).execute()
         return file
     except HttpError as e:
         logger.error(f"An error occurred during file upload: {e}")
         return None
+
+
+def count_all_files_for_branch(service, branch_id):
+    """Recursively counts all 'Notes' and 'Assignments' files within a branch."""
+    notes_count = 0
+    assignments_count = 0
+    
+    subjects = list_items(service, branch_id, "folders")
+    
+    for subject in subjects:
+        notes_folder_id = get_folder_id(service, subject['id'], "Notes")
+        if notes_folder_id:
+            notes_files = list_items(service, notes_folder_id, "files")
+            notes_count += len(notes_files)
+            
+        assignments_folder_id = get_folder_id(service, subject['id'], "Assignments")
+        if assignments_folder_id:
+            assignments_files = list_items(service, assignments_folder_id, "files")
+            assignments_count += len(assignments_files)
+            
+    return notes_count, assignments_count
