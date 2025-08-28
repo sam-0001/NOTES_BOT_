@@ -31,33 +31,27 @@ CHOOSING_STAT = 0
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 
-
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
     if user_id in config.OWNER_IDS:
         await update.message.reply_text(
             f"👋 Welcome back, Admin {user_name}!\n\n"
             "You have access to all admin commands. Use /help to see the list."
         )
         return ConversationHandler.END
-
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
             "Use /notes or /assignments. To see all commands, type /help."
         )
         return ConversationHandler.END
-
     await update.message.reply_text(
         f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
         "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
         "To get started, let's set up your profile."
     )
-    
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "Please select your academic year:",
@@ -220,51 +214,38 @@ async def cancel_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 @rate_limit(limit_seconds=10, max_calls=2)
 @busy_lock
 async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles /notes and /assignments with robust error recovery and callback data handling."""
     try:
         if not check_user_setup(context.user_data):
             await update.message.reply_text("Please run /start first to set up your profile.")
             return
-
         greeting = f"{random.choice(config.GREETINGS)}, {context.user_data['name']}!"
         await update.message.reply_text(greeting)
-        
         service = get_drive_service()
         if not service:
             await update.message.reply_text("Could not connect to Google Drive at the moment. Please try again later.")
             return
-
         command_type = 'notes' if update.message.text.startswith('/notes') else 'assignments'
         year_folder_name = context.user_data['year'].replace(" ", "_")
         branch_name = context.user_data['branch']
-        
         year_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
         if not year_id:
             await update.message.reply_text("Could not find your year folder on Drive.")
             return
-
         branch_id = get_folder_id(service, year_id, branch_name)
         if not branch_id:
             await update.message.reply_text("Could not find your branch folder on Drive.")
             return
-
         subjects = list_items(service, branch_id, "folders")
         valid_subjects = [s for s in subjects if s.get("name")]
         if not valid_subjects:
             await update.message.reply_text("No subjects found for your branch.")
             return
-
-        # --- MODIFIED PART TO PREVENT Button_data_invalid ---
-        # Temporarily store the names to avoid putting them in callback_data
         subject_names_map = {s['id']: s['name'] for s in valid_subjects}
         context.user_data['last_subject_names'] = subject_names_map
-
-        # Create buttons with shorter callback_data
         keyboard = [
             [InlineKeyboardButton(s['name'], callback_data=f"subj:{s['id']}:{command_type}")]
             for s in valid_subjects
         ]
-        
         await update.message.reply_text(
             f"Please select a subject to get {command_type}:",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -272,7 +253,6 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         config.logger.error(f"Error in file_selection_command: {e}")
         await update.message.reply_text("❗️ An error occurred. Please try again later.")
-
 
 @rate_limit(limit_seconds=5, max_calls=1)
 async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -318,10 +298,9 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if query.data == "stats_quick":
         await query.edit_message_text("Gathering stats, please wait...")
         total_users = db["user_data"].count_documents({})
-        monthly_users = db["user_data"].count_documents({"created_at": {"$gte": datetime(datetime.utcnow().year, datetime.utcnow().month, 1)}})
         pipeline = [{"$group": {"_id": "$subject_name", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 5}]
         trending_subjects = list(db["access_logs"].aggregate(pipeline))
-        stats_text = f"📊 *Quick Bot Analytics*\n\n👥 *Total Registered Users:* {total_users}\n📈 *New Users This Month:* {monthly_users}\n\n📚 *Trending Subjects (by clicks):*\n"
+        stats_text = f"📊 *Quick Bot Analytics*\n\n👥 *Total Registered Users:* {total_users}\n\n📈 *Trending Subjects (by clicks):*\n"
         if trending_subjects:
             for i, subject in enumerate(trending_subjects):
                 stats_text += f"{i+1}. {subject['_id']} ({subject['count']} clicks)\n"
