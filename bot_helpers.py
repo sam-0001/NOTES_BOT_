@@ -1,93 +1,120 @@
-# bot_helpers.py
+# drive_utils.py
 
-import asyncio
-from functools import wraps
-from time import time
-from telegram import Update
-from telegram.ext import ContextTypes
+import os
+import io
+import json
+import logging
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+
 import config
 
-def busy_lock(func):
-    """Decorator to prevent a user from running commands concurrently."""
-    @wraps(func)
-    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if context.user_data.get('is_busy', False):
-            await update.effective_message.reply_text("⏳ Please wait, I'm processing your previous request.")
-            return
-        context.user_data['is_busy'] = True
-        try:
-            return await func(update, context, *args, **kwargs)
-        finally:
-            context.user_data['is_busy'] = False
-    return wrapped
+logger = logging.getLogger(__name__)
 
-def check_user_setup(user_data):
-    """Checks if the user has completed the initial setup."""
-    return all(
-        isinstance(user_data.get(key), str) and user_data.get(key).strip()
-        for key in ['year', 'branch', 'name']
-    )
 
-async def send_wait_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Sends a waiting message if a task takes too long."""
+def _load_service_account_credentials():
+    if not config.SERVICE_ACCOUNT_ENV:
+        raise RuntimeError("SERVICE_ACCOUNT_JSON env var is missing.")
+    
+    scopes = ['https://www.googleapis.com/auth/drive']
     try:
-        await asyncio.sleep(3)
-        wait_message = (
-            "We're getting your file, please wait. Thank you for your patience, "
-            "we are always trying to make it faster! 🚀"
+        info = json.loads(config.SERVICE_ACCOUNT_ENV)
+        return service_account.Credentials.from_service_account_info(info, scopes=scopes)
+    except json.JSONDecodeError as e:
+        raise RuntimeError("SERVICE_ACCOUNT_JSON is not valid JSON.") from e
+
+
+def get_drive_service():
+    try:
+        creds = _load_service_account_credentials()
+        return build('drive', 'v3', credentials=creds)
+    except Exception as e:
+        logger.error(f"Failed to create Drive service: {e}")
+        return None
+
+
+def get_folder_id(service, parent_id, folder_name):
+    """Finds a folder's ID by name within a parent folder using a direct query."""
+    try:
+        query = (
+            f"'{parent_id}' in parents and "
+            f"mimeType = 'application/vnd.google-apps.folder' and "
+            f"name = '{folder_name}' and " # Use a precise name search
+            f"trashed = false"
         )
-        await context.bot.send_message(chat_id, wait_message)
-    except asyncio.CancelledError:
-        pass
+        logger.info(f"Searching for folder with query: {query}")
+        
+        results = service.files().list(
+            q=query,
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora="allDrives"
+        ).execute()
+        
+        logger.info(f"Google Drive API response for '{folder_name}': {results}")
+        items = results.get('files', [])
+        
+        if items:
+            return items[0]['id']
+        else:
+            logger.warning(f"Folder '{folder_name}' not found inside parent '{parent_id}'.")
+            return None
+            
+    except HttpError as e:
+        logger.error(f"An error occurred while searching for folder '{folder_name}': {e}")
+    return None
 
-# --- NEW Rate Limiting Decorator ---
-def rate_limit(limit_seconds: int = 5, max_calls: int = 3):
-    """Decorator to limit how often a user can use a command."""
-    def decorator(func):
-        @wraps(func)
-        async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-            user_id = update.effective_user.id
-            now = time()
-            timestamps = context.user_data.get('rate_limit_timestamps', {}).get(func.__name__, [])
-            
-            # Filter out old timestamps
-            timestamps = [ts for ts in timestamps if now - ts < limit_seconds]
-            
-            if len(timestamps) >= max_calls:
-                await update.effective_message.reply_text("You are sending requests too quickly. Please wait a moment.")
-                return
-            
-            timestamps.append(now)
-            if 'rate_limit_timestamps' not in context.user_data:
-                context.user_data['rate_limit_timestamps'] = {}
-            context.user_data['rate_limit_timestamps'][func.__name__] = timestamps
-            
-            return await func(update, context, *args, **kwargs)
-        return wrapped
-    return decorator
 
-# --- UPDATED Admin Verification Decorator ---
-def owner_only(func):
-    """Decorator to restrict a command and alert on unauthorized access."""
-    @wraps(func)
-    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user = update.effective_user
-        if user.id not in config.OWNER_IDS:
-            alert_message = (
-                f"⚠️ *Unauthorized Access Alert*\n\n"
-                f"A non-admin user tried to use an admin command.\n\n"
-                f"👤 *User:* {user.first_name} (@{user.username})\n"
-                f"🆔 *ID:* `{user.id}`\n"
-                f"📝 *Command:* `{update.message.text}`"
-            )
-            config.logger.warning(f"Unauthorized access attempt by user {user.id}")
-            if config.FEEDBACK_GROUP_ID:
-                await context.bot.send_message(
-                    chat_id=config.FEEDBACK_GROUP_ID,
-                    text=alert_message,
-                    parse_mode="Markdown"
-                )
-            await update.message.reply_text("⛔ Sorry, this is an admin-only command.")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapped
+def list_items(service, parent_id, item_type="folders"):
+    mime_type_query = (
+        "mimeType = 'application/vnd.google-apps.folder'"
+        if item_type == "folders"
+        else "mimeType != 'application/vnd.google-apps.folder'"
+    )
+    try:
+        query = f"'{parent_id}' in parents and {mime_type_query} and trashed = false"
+        results = service.files().list(
+            q=query, 
+            pageSize=100, 
+            fields="files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        return results.get('files', [])
+    except HttpError as e:
+        logger.error(f"An error occurred while listing items in folder '{parent_id}': {e}")
+        return []
+
+
+def download_file(service, file_id):
+    try:
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        file_handle = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_handle, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        file_handle.seek(0)
+        return file_handle
+    except HttpError as e:
+        logger.error(f"An error occurred while downloading file ID '{file_id}': {e}")
+        return None
+
+
+def upload_file(service, folder_id, file_name, file_handle, mimetype='application/octet-stream'):
+    try:
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(file_handle, mimetype=mimetype, resumable=True)
+        file = service.files().create(
+            body=file_metadata, 
+            media_body=media, 
+            fields='id, webViewLink',
+            supportsAllDrives=True
+        ).execute()
+        return file
+    except HttpError as e:
+        logger.error(f"An error occurred during file upload: {e}")
+        return None
