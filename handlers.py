@@ -516,7 +516,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     elif action == 'dl':
         context.application.persistence.db["user_data"].update_one(
-            {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
+            {"_id": query.from_user.id},
+            {"$inc": {"data.points": 1}}, # This now correctly targets the nested field
+            upsert=True
         )
         file_id = data_parts[1]
         file_name = context.user_data.get('last_file_names', {}).get(file_id)
