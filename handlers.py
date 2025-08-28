@@ -25,6 +25,7 @@ from telegram.ext import (
 import config
 from drive_utils import get_drive_service, get_folder_id, list_items, download_file
 from bot_helpers import owner_only, busy_lock, check_user_setup, send_wait_message, rate_limit
+from leaderboard import get_leaderboard_text
 
 # Conversation states
 CHOOSING_STAT = 0
@@ -157,24 +158,9 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @rate_limit(limit_seconds=10, max_calls=1)
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the top 10 users with the most points by calling the leaderboard module."""
     await update.message.reply_text("🏆 Fetching the leaderboard...")
-    db = context.application.persistence.db
-    pipeline = [
-        {"$match": {"data.points": {"$exists": True}}},
-        {"$sort": {"data.points": -1}},
-        {"$limit": 10}
-    ]
-    top_users = list(db["user_data"].aggregate(pipeline))
-    if not top_users:
-        await update.message.reply_text("The leaderboard is empty. Start downloading files to get points!")
-        return
-    leaderboard_text = "🏆 *Top 10 Study Champions*\n\n"
-    rank_emojis = ["🥇", "🥈", "🥉", "4.", "5.", "6.", "7.", "8.", "9.", "10."]
-    for i, user_doc in enumerate(top_users):
-        user_data = user_doc.get("data", {})
-        name = user_data.get("name", "A User")
-        points = user_data.get("points", 0)
-        leaderboard_text += f"{rank_emojis[i]} *{name}* - {points} points\n"
+    leaderboard_text = get_leaderboard_text(context)
     await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
 
 # --- In-App Feedback Conversation ---
@@ -505,6 +491,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not files:
             await query.edit_message_text(f"No {command_type} found for '{subject_name}'.")
             return
+        
         file_names_map = {f['id']: f['name'] for f in files}
         context.user_data['last_file_names'] = file_names_map
         keyboard = [
@@ -516,9 +503,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     elif action == 'dl':
         context.application.persistence.db["user_data"].update_one(
-            {"_id": query.from_user.id},
-            {"$inc": {"data.points": 1}}, # This now correctly targets the nested field
-            upsert=True
+            {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
         )
         file_id = data_parts[1]
         file_name = context.user_data.get('last_file_names', {}).get(file_id)
