@@ -1,7 +1,6 @@
 # leaderboard.py
 
 from telegram.ext import ContextTypes
-# Make sure drive_utils is available to this file
 from drive_utils import get_drive_service, get_folder_id, count_all_files_for_branch
 import config
 
@@ -11,6 +10,7 @@ def get_leaderboard_text(context: ContextTypes.DEFAULT_TYPE) -> str:
     """
     db = context.application.persistence.db
     
+    # The query must look for "points" inside the nested "data" object.
     pipeline = [
         {"$match": {"data.points": {"$exists": True}}},
         {"$sort": {"data.points": -1}},
@@ -43,6 +43,7 @@ def get_leaderboard_text(context: ContextTypes.DEFAULT_TYPE) -> str:
             if year_id:
                 branch_id = get_folder_id(service, year_id, branch)
                 if branch_id:
+                    # Calculate max points: 1 for notes, 2 for assignments
                     notes_count, assignments_count = count_all_files_for_branch(service, branch_id)
                     max_points = (notes_count * 1) + (assignments_count * 2)
 
