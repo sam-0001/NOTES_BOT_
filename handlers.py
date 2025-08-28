@@ -33,6 +33,7 @@ CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = ra
 
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
     if user_id in config.OWNER_IDS:
@@ -431,12 +432,12 @@ async def broadcast_message_received(update: Update, context: ContextTypes.DEFAU
     target_criteria = context.user_data.get('broadcast_target', {})
     message = update.message
     await update.message.reply_text("Finding users and preparing to broadcast...")
-    query = {}
+    query_filter = {}
     if not target_criteria.get("all", False):
-        query["data.year"] = target_criteria.get("year")
-        query["data.branch"] = target_criteria.get("branch")
+        query_filter["data.year"] = target_criteria.get("year")
+        query_filter["data.branch"] = target_criteria.get("branch")
     db = context.application.persistence.db
-    target_users = list(db["user_data"].find(query, {"_id": 1}))
+    target_users = list(db["user_data"].find(query_filter, {"_id": 1}))
     user_ids = [user["_id"] for user in target_users]
     if not user_ids:
         await update.message.reply_text("No users found matching the criteria. Broadcast cancelled.")
@@ -504,8 +505,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not files:
             await query.edit_message_text(f"No {command_type} found for '{subject_name}'.")
             return
+        file_names_map = {f['id']: f['name'] for f in files}
+        context.user_data['last_file_names'] = file_names_map
         keyboard = [
-            [InlineKeyboardButton(f['name'], callback_data=f"dl:{f['id']}:{f['name']}")]
+            [InlineKeyboardButton(f['name'], callback_data=f"dl:{f['id']}")]
             for f in files
         ]
         await query.edit_message_text(
@@ -515,7 +518,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.application.persistence.db["user_data"].update_one(
             {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
         )
-        file_id, file_name = data_parts[1], data_parts[2]
+        file_id = data_parts[1]
+        file_name = context.user_data.get('last_file_names', {}).get(file_id)
+        if not file_name:
+            await query.edit_message_text("Sorry, something went wrong. Please try again.")
+            return
         await query.edit_message_text(text=f"⬇️ Preparing to download '{file_name}'...")
         wait_task = asyncio.create_task(send_wait_message(context, query.message.chat.id))
         try:
