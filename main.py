@@ -94,12 +94,11 @@ async def main_setup() -> None:
         fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
     )
     
-    # --- CORRECTED STATS HANDLER ---
     stats_conv = ConversationHandler(
         entry_points=[CommandHandler("stats", h.stats_command)],
         states={
             h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)],
-            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)] # <-- Add this state
+            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)]
         },
         fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
     )
