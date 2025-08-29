@@ -23,6 +23,7 @@ import handlers as h
 
 # --- Custom MongoDB Persistence Class ---
 class MongoPersistence(BasePersistence):
+    # ... (class content is correct and unchanged)
     def __init__(self, mongo_url: str, db_name: str = "telegram_bot_db"):
         super().__init__()
         self.client = MongoClient(mongo_url)
@@ -93,15 +94,6 @@ async def main_setup() -> None:
         },
         fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
     )
-    
-    stats_conv = ConversationHandler(
-        entry_points=[CommandHandler("stats", h.stats_command)],
-        states={
-            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)],
-            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)]
-        },
-        fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
-    )
 
     feedback_conv = ConversationHandler(
         entry_points=[CommandHandler("suggest", h.suggestion_start)],
@@ -122,13 +114,14 @@ async def main_setup() -> None:
         fallbacks=[CommandHandler("cancel", h.cancel_broadcast)], persistent=False, name="broadcast_conv"
     )
 
-    # Register all handlers
+    # --- Register all handlers ---
     application.add_handler(setup_conv)
-    #application.add_handler(stats_conv)
+    # The stats_conv has been removed
     application.add_handler(feedback_conv)
     application.add_handler(broadcast_conv)
     
     application.add_handler(CommandHandler("help", h.help_command))
+    application.add_handler(CommandHandler("stats", h.stats_command)) # <-- Replaced with a simple CommandHandler
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
