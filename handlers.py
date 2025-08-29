@@ -29,7 +29,7 @@ from leaderboard import get_leaderboard_text
 
 # Conversation states
 CHOOSING_STAT = 0
-STATS_AWAITING_YEAR = 1 # State for interactive stats
+STATS_AWAITING_YEAR = 1
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 
@@ -65,6 +65,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def received_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['year'] = update.message.text
+    # Add a timestamp for new user analytics
+    context.user_data['created_at'] = datetime.utcnow()
     year_folder_name = context.user_data['year'].replace(" ", "_")
     await update.message.reply_text("Got it. Fetching available branches...", reply_markup=ReplyKeyboardRemove())
     service = get_drive_service()
@@ -299,7 +301,6 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("No user data to export.")
             return ConversationHandler.END
         df = pd.DataFrame(user_list)
-        # Ensure 'points' column exists, filling missing values with 0
         if 'points' not in df.columns:
             df['points'] = 0
         df['points'] = df['points'].fillna(0).astype(int)
