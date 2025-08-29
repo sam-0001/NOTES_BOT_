@@ -124,7 +124,7 @@ async def main_setup() -> None:
 
     # Register all handlers
     application.add_handler(setup_conv)
-    application.add_handler(stats_conv)
+    #application.add_handler(stats_conv)
     application.add_handler(feedback_conv)
     application.add_handler(broadcast_conv)
     
