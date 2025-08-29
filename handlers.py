@@ -32,6 +32,7 @@ CHOOSING_STAT = 0
 STATS_AWAITING_YEAR = 1
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
+ADMIN_CHOOSE_YEAR, ADMIN_CHOOSE_BRANCH, ADMIN_CHOOSE_SUBJECT = range(3)
 
 
 # --- User Onboarding Conversation ---
@@ -130,8 +131,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "\n\n*Admin Commands:*\n"
             "📊 */stats* - View bot usage analytics.\n"
             "📡 */broadcast* - Send a message to users.\n"
-            "🗂️ */getnotes* `<Y> <B> <S>` - Direct file access.\n"
-            "📋 */getassignments* `<Y> <B> <S>` - Direct file access."
+            "🗂️ */getnotes* - Interactively get notes.\n"
+            "📋 */getassignments* - Interactively get assignments."
         )
         help_text += admin_text
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -272,51 +273,61 @@ async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- Admin Commands ---
 @owner_only
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Directly generates and sends an Excel file with all user data."""
-    await update.message.reply_text("Generating user report, please wait...")
-    
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyboard = [
+        [InlineKeyboardButton("📊 Quick Stats", callback_data="stats_quick")],
+        [InlineKeyboardButton("📄 Export All Users to Excel", callback_data="stats_export_users")],
+    ]
+    await update.message.reply_text("Admin Analytics Dashboard\n\nPlease choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return CHOOSING_STAT
+
+async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
     db = context.application.persistence.db
-    user_docs = list(db["user_data"].find({}))
-    user_list = [doc.get('data', {}) for doc in user_docs]
-    
-    if not user_list:
-        await update.message.reply_text("No user data to export.")
-        return
-        
-    df = pd.DataFrame(user_list)
-    # Ensure 'points' column exists if some users haven't downloaded anything
-    if 'points' not in df.columns:
-        df['points'] = 0
-    df['points'] = df['points'].fillna(0).astype(int)
-    
-    # Select and reorder columns
-    df_filtered = df[['name', 'year', 'branch', 'points']]
-    
-    output = io.BytesIO()
-    df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
-    output.seek(0)
-    
-    await update.message.reply_document(
-        document=output, 
-        filename="Filtered_Users_Report.xlsx"
-    )
+    if query.data == "stats_quick":
+        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
+        await query.message.reply_text(
+            "Please select a year to see its trending subjects.",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        await query.delete_message()
+        return STATS_AWAITING_YEAR
+    elif query.data == "stats_export_users":
+        await query.edit_message_text("Generating user report, please wait...")
+        user_docs = list(db["user_data"].find({}))
+        user_list = [doc.get('data', {}) for doc in user_docs]
+        if not user_list:
+            await query.edit_message_text("No user data to export.")
+            return ConversationHandler.END
+        df = pd.DataFrame(user_list)
+        if 'points' not in df.columns:
+            df['points'] = 0
+        df['points'] = df['points'].fillna(0).astype(int)
+        df_filtered = df[['name', 'year', 'branch', 'points']]
+        output = io.BytesIO()
+        df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
+        output.seek(0)
+        await context.bot.send_document(chat_id=query.from_user.id, document=output, filename="Filtered_Users_Report.xlsx")
+        await query.delete_message()
+        return ConversationHandler.END
 
 async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     selected_year = update.message.text
     await update.message.reply_text(f"Gathering stats for {selected_year}, please wait...", reply_markup=ReplyKeyboardRemove())
     db = context.application.persistence.db
-    year_users = list(db["user_data"].find({"data.year": selected_year}, {"_id": 1}))
-    user_ids_in_year = [user["_id"] for user in year_users]
     pipeline = [
-        {"$match": {"user_id": {"$in": user_ids_in_year}}},
-        {"$group": {"_id": "$subject_name", "count": {"$sum": 1}}},
+        {"$match": {"data.year": selected_year}},
+        {"$lookup": {"from": "access_logs", "localField": "_id", "foreignField": "user_id", "as": "logs"}},
+        {"$unwind": "$logs"},
+        {"$group": {"_id": "$logs.subject_name", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": 5}
     ]
-    trending_subjects = list(db["access_logs"].aggregate(pipeline))
+    trending_subjects = list(db["user_data"].aggregate(pipeline))
+    total_users_in_year = db["user_data"].count_documents({"data.year": selected_year})
     stats_text = f"📊 *Analytics for {selected_year}*\n\n"
-    stats_text += f"👥 *Total Registered Users in this year:* {len(user_ids_in_year)}\n\n"
+    stats_text += f"👥 *Total Registered Users in this year:* {total_users_in_year}\n\n"
     stats_text += "📈 *Trending Subjects (by clicks):*\n"
     if trending_subjects:
         for i, subject in enumerate(trending_subjects):
@@ -327,66 +338,66 @@ async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 @owner_only
-async def admin_get_files_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the interactive file fetching process for admins."""
     is_notes = update.message.text.startswith("/getnotes")
-    command_type = "notes" if is_notes else "assignments"
-    command_name = "/getnotes" if is_notes else "/getassignments"
-    args = context.args
-    if len(args) == 0:
-        await update.message.reply_text(
-            f"Please provide arguments.\n\nUsage:\n`{command_name} <Year> <Branch> [Subject]`\n\n"
-            "Example:\n`/getnotes 2nd_Year Computer DSA`",
-            parse_mode="Markdown"
-        )
-        return
+    context.user_data['admin_command_type'] = "notes" if is_notes else "assignments"
     service = get_drive_service()
     if not service:
         await update.message.reply_text("Could not connect to Google Drive.")
-        return
-    try:
-        year_name = args[0]
-        year_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_name)
-        if not year_id:
-            await update.message.reply_text(f"Year '{year_name}' not found.")
-            return
-        if len(args) == 1:
-            branches = list_items(service, year_id, "folders")
-            branch_names = "\n".join([f"- `{b['name']}`" for b in branches])
-            await update.message.reply_text(f"Branches in {year_name}:\n{branch_names}", parse_mode="Markdown")
-            return
-        branch_name = args[1]
-        branch_id = get_folder_id(service, year_id, branch_name)
-        if not branch_id:
-            await update.message.reply_text(f"Branch '{branch_name}' not found in '{year_name}'.")
-            return
-        if len(args) == 2:
-            subjects = list_items(service, branch_id, "folders")
-            subject_names = "\n".join([f"- `{s['name']}`" for s in subjects])
-            await update.message.reply_text(f"Subjects in {year_name}, {branch_name}:\n{subject_names}", parse_mode="Markdown")
-            return
-        subject_name = args[2]
-        subject_id = get_folder_id(service, branch_id, subject_name)
-        if not subject_id:
-            await update.message.reply_text(f"Subject '{subject_name}' not found.")
-            return
-        subfolder_name = "Notes" if is_notes else "Assignments"
-        target_folder_id = get_folder_id(service, subject_id, subfolder_name)
-        if not target_folder_id:
-            await update.message.reply_text(f"The '{subfolder_name}' folder for '{subject_name}' doesn't exist.")
-            return
-        files = list_items(service, target_folder_id, "files")
-        if not files:
-            await update.message.reply_text(f"No {command_type} found for '{subject_name}'.")
-            return
-        await update.message.reply_text(f"Found {len(files)} {command_type} for '{subject_name}'. Sending them now...")
-        for file_item in files:
-            file_content = download_file(service, file_item['id'])
-            if file_content:
-                await update.message.reply_document(document=file_content, filename=file_item['name'])
-            await asyncio.sleep(1)
-    except Exception as e:
-        config.logger.error(f"Error in admin_get_files_command: {e}")
-        await update.message.reply_text("An error occurred. Please check your arguments and try again.")
+        return ConversationHandler.END
+    years = list_items(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, "folders")
+    keyboard = [[InlineKeyboardButton(year['name'], callback_data=f"admin_year_{year['id']}")] for year in years]
+    await update.message.reply_text("Please choose a year:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADMIN_CHOOSE_YEAR
+
+async def admin_year_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles year selection and shows branches."""
+    query = update.callback_query
+    await query.answer()
+    year_id = query.data.split('_')[-1]
+    service = get_drive_service()
+    branches = list_items(service, year_id, "folders")
+    keyboard = [[InlineKeyboardButton(branch['name'], callback_data=f"admin_branch_{branch['id']}")] for branch in branches]
+    await query.edit_message_text("Please choose a branch:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADMIN_CHOOSE_BRANCH
+
+async def admin_branch_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles branch selection and shows subjects."""
+    query = update.callback_query
+    await query.answer()
+    branch_id = query.data.split('_')[-1]
+    service = get_drive_service()
+    subjects = list_items(service, branch_id, "folders")
+    keyboard = [[InlineKeyboardButton(subject['name'], callback_data=f"admin_subject_{subject['id']}")] for subject in subjects]
+    await query.edit_message_text("Please choose a subject:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADMIN_CHOOSE_SUBJECT
+
+async def admin_subject_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles subject selection and sends the files."""
+    query = update.callback_query
+    await query.answer()
+    subject_id = query.data.split('_')[-1]
+    command_type = context.user_data.get('admin_command_type', 'notes')
+    subfolder_name = "Notes" if command_type == "notes" else "Assignments"
+    await query.edit_message_text(f"Fetching {command_type}, please wait...")
+    service = get_drive_service()
+    target_folder_id = get_folder_id(service, subject_id, subfolder_name)
+    if not target_folder_id:
+        await query.edit_message_text(f"The '{subfolder_name}' folder does not exist for this subject.")
+        return ConversationHandler.END
+    files = list_items(service, target_folder_id, "files")
+    if not files:
+        await query.edit_message_text(f"No {command_type} found for this subject.")
+        return ConversationHandler.END
+    await query.message.reply_text(f"Found {len(files)} {command_type}. Sending them now...")
+    for file_item in files:
+        file_content = download_file(service, file_item['id'])
+        if file_content:
+            await query.message.reply_document(document=file_content, filename=file_item['name'])
+        await asyncio.sleep(1)
+    await query.delete_message()
+    return ConversationHandler.END
 
 @owner_only
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -394,154 +405,4 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("Who should receive this broadcast message?", reply_markup=InlineKeyboardMarkup(keyboard))
     return CHOOSING_BROADCAST_TARGET
 
-async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    target = query.data
-    if target == "broadcast_all":
-        context.user_data['broadcast_target'] = {"all": True}
-        await query.edit_message_text("Please send the message you want to broadcast to all users. Type /cancel to quit.")
-        return AWAITING_MESSAGE
-    elif target == "broadcast_specific":
-        context.user_data['broadcast_target'] = {}
-        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
-        await query.message.reply_text("Please select the target year.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
-        await query.delete_message()
-        return AWAITING_YEAR
-
-async def broadcast_year_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    year = update.message.text
-    context.user_data['broadcast_target']['year'] = year
-    service = get_drive_service()
-    year_folder_name = year.replace(" ", "_")
-    year_folder_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
-    branches = list_items(service, year_folder_id, "folders")
-    branch_names = [b['name'] for b in branches]
-    reply_keyboard = [branch_names[i:i + 2] for i in range(0, len(branch_names), 2)]
-    await update.message.reply_text("Now, please select the target branch.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
-    return AWAITING_BRANCH
-
-async def broadcast_branch_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    branch = update.message.text
-    context.user_data['broadcast_target']['branch'] = branch
-    await update.message.reply_text(
-        f"Target set to: {context.user_data['broadcast_target']['year']}, {branch}.\n\n"
-        "Now, please send the message to broadcast (text, image with caption, or document with caption).",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return AWAITING_MESSAGE
-
-async def broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    target_criteria = context.user_data.get('broadcast_target', {})
-    message = update.message
-    await update.message.reply_text("Finding users and preparing to broadcast...")
-    query_filter = {}
-    if not target_criteria.get("all", False):
-        query_filter["data.year"] = target_criteria.get("year")
-        query_filter["data.branch"] = target_criteria.get("branch")
-    db = context.application.persistence.db
-    target_users = list(db["user_data"].find(query_filter, {"_id": 1}))
-    user_ids = [user["_id"] for user in target_users]
-    if not user_ids:
-        await update.message.reply_text("No users found matching the criteria. Broadcast cancelled.")
-        return ConversationHandler.END
-    await update.message.reply_text(f"Found {len(user_ids)} users. Starting broadcast... This may take some time.")
-    success_count = 0
-    fail_count = 0
-    for user_id in user_ids:
-        try:
-            await message.forward(chat_id=user_id)
-            success_count += 1
-            await asyncio.sleep(0.1)
-        except Exception as e:
-            fail_count += 1
-            config.logger.error(f"Failed to send broadcast to {user_id}: {e}")
-    await update.message.reply_text(
-        f"Broadcast complete!\n\n✅ Sent successfully to {success_count} users.\n"
-        f"❌ Failed to send to {fail_count} users (they may have blocked the bot)."
-    )
-    if 'broadcast_target' in context.user_data:
-        del context.user_data['broadcast_target']
-    return ConversationHandler.END
-
-async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if 'broadcast_target' in context.user_data:
-        del context.user_data['broadcast_target']
-    await update.message.reply_text("Broadcast cancelled.")
-    return ConversationHandler.END
-
-# --- General Callback Query Handler ---
-@busy_lock
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    if query.data.startswith("stats_"):
-        return
-        
-    data_parts = query.data.split(":")
-    action = data_parts[0]
-    
-    if action == 'subj':
-        subject_id = data_parts[1]
-        command_type = data_parts[2]
-        subject_name = context.user_data.get('last_subject_names', {}).get(subject_id)
-        if not subject_name:
-            await query.edit_message_text("Sorry, something went wrong. Please try the command again.")
-            return
-            
-        context.application.persistence.db["access_logs"].insert_one({
-            "user_id": query.from_user.id,
-            "subject_name": subject_name,
-            "type": command_type,
-            "timestamp": datetime.utcnow()
-        })
-        service = get_drive_service()
-        if not service:
-            await query.edit_message_text("Could not connect to Google Drive right now.")
-            return
-        subfolder_name = "Notes" if command_type == "notes" else "Assignments"
-        target_folder_id = get_folder_id(service, subject_id, subfolder_name)
-        if not target_folder_id:
-            await query.edit_message_text(f"The '{subfolder_name}' folder for '{subject_name}' doesn't exist.")
-            return
-        files = list_items(service, target_folder_id, "files")
-        if not files:
-            await query.edit_message_text(f"No {command_type} found for '{subject_name}'.")
-            return
-        
-        file_names_map = {f['id']: f['name'] for f in files}
-        context.user_data['last_file_names'] = file_names_map
-        keyboard = [
-            [InlineKeyboardButton(f['name'], callback_data=f"dl:{f['id']}")]
-            for f in files
-        ]
-        await query.edit_message_text(
-            text=f"Select a file from '{subject_name}':", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif action == 'dl':
-        # Award points for the download
-        context.application.persistence.db["user_data"].update_one(
-            {"_id": query.from_user.id}, 
-            {"$inc": {"data.points": 1}}, 
-            upsert=True
-        )
-        
-        file_id = data_parts[1]
-        file_name = context.user_data.get('last_file_names', {}).get(file_id)
-        if not file_name:
-            await query.edit_message_text("Sorry, something went wrong. Please try again.")
-            return
-            
-        await query.edit_message_text(text=f"⬇️ Preparing to download '{file_name}'...")
-        wait_task = asyncio.create_task(send_wait_message(context, query.message.chat.id))
-        try:
-            service = get_drive_service()
-            file_content = download_file(service, file_id) if service else None
-        finally:
-            wait_task.cancel()
-        if file_content:
-            await context.bot.send_document(chat_id=query.message.chat.id, document=file_content, filename=file_name)
-            try: await query.delete_message()
-            except Exception: pass
-        else:
-            await query.edit_message_text(f"❌ Sorry, failed to download '{file_name}'.")
+async def broadcast_ta
