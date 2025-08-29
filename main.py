@@ -70,17 +70,14 @@ if not MONGO_URL:
     raise ValueError("MONGO_URL environment variable not set!")
 
 persistence = MongoPersistence(mongo_url=MONGO_URL)
-
-# --- UPDATED APPLICATION BUILDER WITH TIMEOUTS ---
 application = (
     Application.builder()
     .token(config.TELEGRAM_BOT_TOKEN)
     .persistence(persistence)
-    .connect_timeout(30)  # Time to establish a connection
-    .read_timeout(30)     # Time to wait for a response
+    .connect_timeout(30)
+    .read_timeout(30)
     .build()
 )
-
 app = FastAPI(docs_url=None, redoc_url=None)
 
 # --- Main Bot Logic & Webhooks ---
@@ -96,11 +93,17 @@ async def main_setup() -> None:
         },
         fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
     )
+    
+    # --- CORRECTED STATS HANDLER ---
     stats_conv = ConversationHandler(
         entry_points=[CommandHandler("stats", h.stats_command)],
-        states={h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)]},
+        states={
+            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)],
+            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)] # <-- Add this state
+        },
         fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
     )
+
     feedback_conv = ConversationHandler(
         entry_points=[CommandHandler("suggest", h.suggestion_start)],
         states={
