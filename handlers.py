@@ -29,8 +29,10 @@ from leaderboard import get_leaderboard_text
 
 # Conversation states
 CHOOSING_STAT = 0
+STATS_AWAITING_YEAR = 1
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
+
 
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -158,7 +160,6 @@ async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @rate_limit(limit_seconds=10, max_calls=1)
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the top 10 users with the most points by calling the leaderboard module."""
     await update.message.reply_text("🏆 Fetching the leaderboard...")
     leaderboard_text = get_leaderboard_text(context)
     await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
@@ -283,17 +284,13 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     db = context.application.persistence.db
     if query.data == "stats_quick":
-        await query.edit_message_text("Gathering stats, please wait...")
-        total_users = db["user_data"].count_documents({})
-        pipeline = [{"$group": {"_id": "$subject_name", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 5}]
-        trending_subjects = list(db["access_logs"].aggregate(pipeline))
-        stats_text = f"📊 *Quick Bot Analytics*\n\n👥 *Total Registered Users:* {total_users}\n\n📈 *Trending Subjects (by clicks):*\n"
-        if trending_subjects:
-            for i, subject in enumerate(trending_subjects):
-                stats_text += f"{i+1}. {subject['_id']} ({subject['count']} clicks)\n"
-        else:
-            stats_text += "No subject usage has been recorded yet."
-        await query.edit_message_text(stats_text, parse_mode="Markdown")
+        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
+        await query.message.reply_text(
+            "Please select a year to see its trending subjects.",
+            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        )
+        await query.delete_message()
+        return STATS_AWAITING_YEAR
     elif query.data == "stats_export_users":
         await query.edit_message_text("Generating user report, please wait...")
         user_docs = list(db["user_data"].find({}))
@@ -302,11 +299,37 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("No user data to export.")
             return ConversationHandler.END
         df = pd.DataFrame(user_list)
+        # Select and reorder columns
+        df_filtered = df[['name', 'year', 'branch', 'points']]
         output = io.BytesIO()
-        df.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
+        df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
         output.seek(0)
-        await context.bot.send_document(chat_id=query.from_user.id, document=output, filename="All_Users_Report.xlsx")
+        await context.bot.send_document(chat_id=query.from_user.id, document=output, filename="Filtered_Users_Report.xlsx")
         await query.delete_message()
+    return ConversationHandler.END
+
+async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    selected_year = update.message.text
+    await update.message.reply_text(f"Gathering stats for {selected_year}, please wait...", reply_markup=ReplyKeyboardRemove())
+    db = context.application.persistence.db
+    year_users = list(db["user_data"].find({"data.year": selected_year}, {"_id": 1}))
+    user_ids_in_year = [user["_id"] for user in year_users]
+    pipeline = [
+        {"$match": {"user_id": {"$in": user_ids_in_year}}},
+        {"$group": {"_id": "$subject_name", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 5}
+    ]
+    trending_subjects = list(db["access_logs"].aggregate(pipeline))
+    stats_text = f"📊 *Analytics for {selected_year}*\n\n"
+    stats_text += f"👥 *Total Registered Users in this year:* {len(user_ids_in_year)}\n\n"
+    stats_text += "📈 *Trending Subjects (by clicks):*\n"
+    if trending_subjects:
+        for i, subject in enumerate(trending_subjects):
+            stats_text += f"{i+1}. {subject['_id']} ({subject['count']} clicks)\n"
+    else:
+        stats_text += "No subject usage has been recorded for this year yet."
+    await update.message.reply_text(stats_text, parse_mode="Markdown")
     return ConversationHandler.END
 
 @owner_only
