@@ -29,7 +29,7 @@ from leaderboard import get_leaderboard_text
 
 # Conversation states
 CHOOSING_STAT = 0
-STATS_AWAITING_YEAR = 1
+STATS_AWAITING_YEAR = 1 # State for interactive stats
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 
@@ -299,14 +299,17 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("No user data to export.")
             return ConversationHandler.END
         df = pd.DataFrame(user_list)
-        # Select and reorder columns
+        # Ensure 'points' column exists, filling missing values with 0
+        if 'points' not in df.columns:
+            df['points'] = 0
+        df['points'] = df['points'].fillna(0).astype(int)
         df_filtered = df[['name', 'year', 'branch', 'points']]
         output = io.BytesIO()
         df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
         output.seek(0)
         await context.bot.send_document(chat_id=query.from_user.id, document=output, filename="Filtered_Users_Report.xlsx")
         await query.delete_message()
-    return ConversationHandler.END
+        return ConversationHandler.END
 
 async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     selected_year = update.message.text
@@ -525,14 +528,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text=f"Select a file from '{subject_name}':", reply_markup=InlineKeyboardMarkup(keyboard)
         )
     elif action == 'dl':
+        # Award points for the download
         context.application.persistence.db["user_data"].update_one(
-            {"_id": query.from_user.id}, {"$inc": {"data.points": 1}}, upsert=True
+            {"_id": query.from_user.id}, 
+            {"$inc": {"data.points": 1}}, 
+            upsert=True
         )
+        
         file_id = data_parts[1]
         file_name = context.user_data.get('last_file_names', {}).get(file_id)
         if not file_name:
             await query.edit_message_text("Sorry, something went wrong. Please try again.")
             return
+            
         await query.edit_message_text(text=f"⬇️ Preparing to download '{file_name}'...")
         wait_task = asyncio.create_task(send_wait_message(context, query.message.chat.id))
         try:
