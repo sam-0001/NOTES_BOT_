@@ -301,8 +301,7 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("No user data to export.")
             return ConversationHandler.END
         df = pd.DataFrame(user_list)
-        if 'points' not in df.columns:
-            df['points'] = 0
+        if 'points' not in df.columns: df['points'] = 0
         df['points'] = df['points'].fillna(0).astype(int)
         df_filtered = df[['name', 'year', 'branch', 'points']]
         output = io.BytesIO()
@@ -352,7 +351,6 @@ async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TY
     return ADMIN_CHOOSE_YEAR
 
 async def admin_year_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles year selection and shows branches."""
     query = update.callback_query
     await query.answer()
     year_id = query.data.split('_')[-1]
@@ -363,7 +361,6 @@ async def admin_year_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ADMIN_CHOOSE_BRANCH
 
 async def admin_branch_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles branch selection and shows subjects."""
     query = update.callback_query
     await query.answer()
     branch_id = query.data.split('_')[-1]
@@ -374,7 +371,6 @@ async def admin_branch_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ADMIN_CHOOSE_SUBJECT
 
 async def admin_subject_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles subject selection and sends the files."""
     query = update.callback_query
     await query.answer()
     subject_id = query.data.split('_')[-1]
@@ -405,4 +401,8 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("Who should receive this broadcast message?", reply_markup=InlineKeyboardMarkup(keyboard))
     return CHOOSING_BROADCAST_TARGET
 
-async def broadcast_ta
+async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    target = query.data
+    if target == "broa
