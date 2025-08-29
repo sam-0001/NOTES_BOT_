@@ -272,44 +272,35 @@ async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- Admin Commands ---
 @owner_only
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    keyboard = [
-        [InlineKeyboardButton("📊 Quick Stats", callback_data="stats_quick")],
-        [InlineKeyboardButton("📄 Export All Users to Excel", callback_data="stats_export_users")],
-    ]
-    await update.message.reply_text("Admin Analytics Dashboard\n\nPlease choose an option:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return CHOOSING_STAT
-
-async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Directly generates and sends an Excel file with all user data."""
+    await update.message.reply_text("Generating user report, please wait...")
+    
     db = context.application.persistence.db
-    if query.data == "stats_quick":
-        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
-        await query.message.reply_text(
-            "Please select a year to see its trending subjects.",
-            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-        )
-        await query.delete_message()
-        return STATS_AWAITING_YEAR
-    elif query.data == "stats_export_users":
-        await query.edit_message_text("Generating user report, please wait...")
-        user_docs = list(db["user_data"].find({}))
-        user_list = [doc.get('data', {}) for doc in user_docs]
-        if not user_list:
-            await query.edit_message_text("No user data to export.")
-            return ConversationHandler.END
-        df = pd.DataFrame(user_list)
-        if 'points' not in df.columns:
-            df['points'] = 0
-        df['points'] = df['points'].fillna(0).astype(int)
-        df_filtered = df[['name', 'year', 'branch', 'points']]
-        output = io.BytesIO()
-        df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
-        output.seek(0)
-        await context.bot.send_document(chat_id=query.from_user.id, document=output, filename="Filtered_Users_Report.xlsx")
-        await query.delete_message()
-        return ConversationHandler.END
+    user_docs = list(db["user_data"].find({}))
+    user_list = [doc.get('data', {}) for doc in user_docs]
+    
+    if not user_list:
+        await update.message.reply_text("No user data to export.")
+        return
+        
+    df = pd.DataFrame(user_list)
+    # Ensure 'points' column exists if some users haven't downloaded anything
+    if 'points' not in df.columns:
+        df['points'] = 0
+    df['points'] = df['points'].fillna(0).astype(int)
+    
+    # Select and reorder columns
+    df_filtered = df[['name', 'year', 'branch', 'points']]
+    
+    output = io.BytesIO()
+    df_filtered.to_excel(output, index=False, sheet_name='Users', engine='openpyxl')
+    output.seek(0)
+    
+    await update.message.reply_document(
+        document=output, 
+        filename="Filtered_Users_Report.xlsx"
+    )
 
 async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     selected_year = update.message.text
