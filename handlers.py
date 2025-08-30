@@ -28,64 +28,35 @@ from bot_helpers import owner_only, busy_lock, check_user_setup, send_wait_messa
 from leaderboard import get_leaderboard_text
 
 # Conversation states
-AWAIT_EMAIL = 0
-CHOOSING_STAT = 1
-STATS_AWAITING_YEAR = 2
+CHOOSING_STAT = 0
+STATS_AWAITING_YEAR = 1
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 ADMIN_CHOOSE_YEAR, ADMIN_CHOOSE_BRANCH, ADMIN_CHOOSE_SUBJECT = range(3)
 
 
-# --- Secure User Onboarding Conversation ---
+# --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the secure onboarding. Asks for email if user is unknown."""
+    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
-    db = context.application.persistence.db
-
+    user_name = update.effective_user.first_name
     if user_id in config.OWNER_IDS:
-        await update.message.reply_text(f"👋 Welcome back, Admin {update.effective_user.first_name}!")
-        return ConversationHandler.END
-
-    existing_user = db["user_data"].find_one({"_id": user_id})
-    if existing_user and check_user_setup(existing_user.get("data", {})):
-        user_name = existing_user.get("data", {}).get("name", "there")
-        await update.message.reply_text(f"👋 Welcome back, {user_name}!")
-        return ConversationHandler.END
-
-    await update.message.reply_text(
-        "Welcome to the SAOE Notes Bot!\n\n"
-        "For security, please enter your official college email address to begin."
-    )
-    return AWAIT_EMAIL
-
-async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Validates the email against the whitelist and checks for uniqueness."""
-    email = update.message.text.lower().strip()
-    user_id = update.effective_user.id
-    db = context.application.persistence.db
-
-    if not db["authorized_emails"].find_one({"email": email}):
-        await update.message.reply_text("❌ This email is not authorized. Access denied.")
-        return ConversationHandler.END
-
-    existing_registration = db["user_data"].find_one({"data.email": email})
-    if existing_registration and existing_registration["_id"] != user_id:
         await update.message.reply_text(
-            "This email is already registered with another Telegram account. Goodbye."
+            f"👋 Welcome back, Admin {user_name}!\n\n"
+            "You have access to all admin commands. Use /help to see the list."
         )
-        try:
-            await context.bot.send_message(
-                chat_id=existing_registration["_id"],
-                text="⚠️ *Security Alert* ⚠️\n\nSomeone just tried to register your email address with a different Telegram account. If this was not you, please contact an administrator.",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            config.logger.error(f"Failed to send security alert to user {existing_registration['_id']}: {e}")
         return ConversationHandler.END
-
-    context.user_data['email'] = email
-    await update.message.reply_text("✅ Email verified! Now let's set up your profile.")
-    
+    if check_user_setup(context.user_data):
+        await update.message.reply_text(
+            f"👋 Welcome back, {context.user_data['name']}!\n\n"
+            "Use /notes or /assignments. To see all commands, type /help."
+        )
+        return ConversationHandler.END
+    await update.message.reply_text(
+        f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
+        "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
+        "To get started, let's set up your profile."
+    )
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "Please select your academic year:",
@@ -138,10 +109,6 @@ async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     if 'available_branches' in context.user_data:
         del context.user_data['available_branches']
-    return ConversationHandler.END
-
-async def cancel_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Setup cancelled.")
     return ConversationHandler.END
 
 # --- Standard User Commands ---
@@ -371,7 +338,6 @@ async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @owner_only
 async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the interactive file fetching process for admins."""
     is_notes = update.message.text.startswith("/getnotes")
     context.user_data['admin_command_type'] = "notes" if is_notes else "assignments"
     service = get_drive_service()
@@ -438,4 +404,140 @@ async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     target = query.data
-    if target == "broa
+    if target == "broadcast_all":
+        context.user_data['broadcast_target'] = {"all": True}
+        await query.edit_message_text("Please send the message you want to broadcast to all users. Type /cancel to quit.")
+        return AWAITING_MESSAGE
+    elif target == "broadcast_specific":
+        context.user_data['broadcast_target'] = {}
+        reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
+        await query.message.reply_text("Please select the target year.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+        await query.delete_message()
+        return AWAITING_YEAR
+
+async def broadcast_year_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    year = update.message.text
+    context.user_data['broadcast_target']['year'] = year
+    service = get_drive_service()
+    year_folder_name = year.replace(" ", "_")
+    year_folder_id = get_folder_id(service, config.GOOGLE_DRIVE_ROOT_FOLDER_ID, year_folder_name)
+    branches = list_items(service, year_folder_id, "folders")
+    branch_names = [b['name'] for b in branches]
+    reply_keyboard = [branch_names[i:i + 2] for i in range(0, len(branch_names), 2)]
+    await update.message.reply_text("Now, please select the target branch.", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return AWAITING_BRANCH
+
+async def broadcast_branch_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    branch = update.message.text
+    context.user_data['broadcast_target']['branch'] = branch
+    await update.message.reply_text(
+        f"Target set to: {context.user_data['broadcast_target']['year']}, {branch}.\n\n"
+        "Now, please send the message to broadcast (text, image with caption, or document with caption).",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return AWAITING_MESSAGE
+
+async def broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    target_criteria = context.user_data.get('broadcast_target', {})
+    message = update.message
+    await update.message.reply_text("Finding users and preparing to broadcast...")
+    query_filter = {}
+    if not target_criteria.get("all", False):
+        query_filter["data.year"] = target_criteria.get("year")
+        query_filter["data.branch"] = target_criteria.get("branch")
+    db = context.application.persistence.db
+    target_users = list(db["user_data"].find(query_filter, {"_id": 1}))
+    user_ids = [user["_id"] for user in target_users]
+    if not user_ids:
+        await update.message.reply_text("No users found matching the criteria. Broadcast cancelled.")
+        return ConversationHandler.END
+    await update.message.reply_text(f"Found {len(user_ids)} users. Starting broadcast... This may take some time.")
+    success_count, fail_count = 0, 0
+    for user_id in user_ids:
+        try:
+            await message.forward(chat_id=user_id)
+            success_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            fail_count += 1
+            config.logger.error(f"Failed to send broadcast to {user_id}: {e}")
+    await update.message.reply_text(
+        f"Broadcast complete!\n\n✅ Sent successfully to {success_count} users.\n"
+        f"❌ Failed to send to {fail_count} users (they may have blocked the bot)."
+    )
+    if 'broadcast_target' in context.user_data: del context.user_data['broadcast_target']
+    return ConversationHandler.END
+
+async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if 'broadcast_target' in context.user_data: del context.user_data['broadcast_target']
+    await update.message.reply_text("Broadcast cancelled.")
+    return ConversationHandler.END
+
+# --- General Callback Query Handler ---
+@busy_lock
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith("stats_"): return
+        
+    data_parts = query.data.split(":")
+    action = data_parts[0]
+    
+    if action == 'subj':
+        subject_id, command_type = data_parts[1], data_parts[2]
+        subject_name = context.user_data.get('last_subject_names', {}).get(subject_id)
+        if not subject_name:
+            await query.edit_message_text("Sorry, something went wrong. Please try the command again.")
+            return
+            
+        context.application.persistence.db["access_logs"].insert_one({
+            "user_id": query.from_user.id, "subject_name": subject_name,
+            "type": command_type, "timestamp": datetime.utcnow()
+        })
+        context.user_data['last_command_type'] = command_type
+        
+        service = get_drive_service()
+        if not service:
+            await query.edit_message_text("Could not connect to Google Drive right now.")
+            return
+        subfolder_name = "Notes" if command_type == "notes" else "Assignments"
+        target_folder_id = get_folder_id(service, subject_id, subfolder_name)
+        if not target_folder_id:
+            await query.edit_message_text(f"The '{subfolder_name}' folder for '{subject_name}' doesn't exist.")
+            return
+        files = list_items(service, target_folder_id, "files")
+        if not files:
+            await query.edit_message_text(f"No {command_type} found for '{subject_name}'.")
+            return
+        
+        file_names_map = {f['id']: f['name'] for f in files}
+        context.user_data['last_file_names'] = file_names_map
+        keyboard = [[InlineKeyboardButton(f['name'], callback_data=f"dl:{f['id']}")] for f in files]
+        await query.edit_message_text(text=f"Select a file from '{subject_name}':", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif action == 'dl':
+        command_type = context.user_data.get('last_command_type', 'notes')
+        points = 2 if command_type == 'assignments' else 1
+        context.application.persistence.db["user_data"].update_one(
+            {"_id": query.from_user.id}, {"$inc": {"data.points": points}}, upsert=True
+        )
+        
+        file_id = data_parts[1]
+        file_name = context.user_data.get('last_file_names', {}).get(file_id)
+        if not file_name:
+            await query.edit_message_text("Sorry, something went wrong. Please try again.")
+            return
+            
+        await query.edit_message_text(text=f"⬇️ Preparing to download '{file_name}'...")
+        wait_task = asyncio.create_task(send_wait_message(context, query.message.chat.id))
+        try:
+            service = get_drive_service()
+            file_content = download_file(service, file_id) if service else None
+        finally:
+            wait_task.cancel()
+        if file_content:
+            await context.bot.send_document(chat_id=query.message.chat.id, document=file_content, filename=file_name)
+            try: await query.delete_message()
+            except Exception: pass
+        else:
+            await query.edit_message_text(f"❌ Sorry, failed to download '{file_name}'.")
