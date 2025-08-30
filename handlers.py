@@ -28,35 +28,64 @@ from bot_helpers import owner_only, busy_lock, check_user_setup, send_wait_messa
 from leaderboard import get_leaderboard_text
 
 # Conversation states
-CHOOSING_STAT = 0
-STATS_AWAITING_YEAR = 1
+AWAIT_EMAIL = 0
+CHOOSING_STAT = 1
+STATS_AWAITING_YEAR = 2
 AWAIT_FEEDBACK_BUTTON, AWAIT_FEEDBACK_TEXT = range(2)
 CHOOSING_BROADCAST_TARGET, AWAITING_YEAR, AWAITING_BRANCH, AWAITING_MESSAGE = range(4)
 ADMIN_CHOOSE_YEAR, ADMIN_CHOOSE_BRANCH, ADMIN_CHOOSE_SUBJECT = range(3)
 
 
-# --- User Onboarding Conversation ---
+# --- Secure User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Greets owners and starts the setup for normal users with an intro."""
+    """Starts the secure onboarding. Asks for email if user is unknown."""
     user_id = update.effective_user.id
-    user_name = update.effective_user.first_name
+    db = context.application.persistence.db
+
     if user_id in config.OWNER_IDS:
-        await update.message.reply_text(
-            f"👋 Welcome back, Admin {user_name}!\n\n"
-            "You have access to all admin commands. Use /help to see the list."
-        )
+        await update.message.reply_text(f"👋 Welcome back, Admin {update.effective_user.first_name}!")
         return ConversationHandler.END
-    if check_user_setup(context.user_data):
-        await update.message.reply_text(
-            f"👋 Welcome back, {context.user_data['name']}!\n\n"
-            "Use /notes or /assignments. To see all commands, type /help."
-        )
+
+    existing_user = db["user_data"].find_one({"_id": user_id})
+    if existing_user and check_user_setup(existing_user.get("data", {})):
+        user_name = existing_user.get("data", {}).get("name", "there")
+        await update.message.reply_text(f"👋 Welcome back, {user_name}!")
         return ConversationHandler.END
+
     await update.message.reply_text(
-        f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
-        "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
-        "To get started, let's set up your profile."
+        "Welcome to the SAOE Notes Bot!\n\n"
+        "For security, please enter your official college email address to begin."
     )
+    return AWAIT_EMAIL
+
+async def receive_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Validates the email against the whitelist and checks for uniqueness."""
+    email = update.message.text.lower().strip()
+    user_id = update.effective_user.id
+    db = context.application.persistence.db
+
+    if not db["authorized_emails"].find_one({"email": email}):
+        await update.message.reply_text("❌ This email is not authorized. Access denied.")
+        return ConversationHandler.END
+
+    existing_registration = db["user_data"].find_one({"data.email": email})
+    if existing_registration and existing_registration["_id"] != user_id:
+        await update.message.reply_text(
+            "This email is already registered with another Telegram account. Goodbye."
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=existing_registration["_id"],
+                text="⚠️ *Security Alert* ⚠️\n\nSomeone just tried to register your email address with a different Telegram account. If this was not you, please contact an administrator.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            config.logger.error(f"Failed to send security alert to user {existing_registration['_id']}: {e}")
+        return ConversationHandler.END
+
+    context.user_data['email'] = email
+    await update.message.reply_text("✅ Email verified! Now let's set up your profile.")
+    
     reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
     await update.message.reply_text(
         "Please select your academic year:",
@@ -109,6 +138,10 @@ async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     )
     if 'available_branches' in context.user_data:
         del context.user_data['available_branches']
+    return ConversationHandler.END
+
+async def cancel_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Setup cancelled.")
     return ConversationHandler.END
 
 # --- Standard User Commands ---
