@@ -37,24 +37,21 @@ ADMIN_CHOOSE_YEAR, ADMIN_CHOOSE_BRANCH, ADMIN_CHOOSE_SUBJECT = range(3)
 
 # --- User Onboarding Conversation ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Greets owners and starts the setup for normal users."""
+    """Greets owners and starts the setup for normal users with an intro."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
     if user_id in config.OWNER_IDS:
         await update.message.reply_text(
             f"👋 Welcome back, Admin {user_name}!\n\n"
             "You have access to all admin commands. Use /help to see the list."
         )
         return ConversationHandler.END
-
     if check_user_setup(context.user_data):
         await update.message.reply_text(
             f"👋 Welcome back, {context.user_data['name']}!\n\n"
             "Use /notes or /assignments. To see all commands, type /help."
         )
         return ConversationHandler.END
-
     await update.message.reply_text(
         f"👋 Welcome to the SAOE Notes Bot, {user_name}!\n\n"
         "I'm here to help you get academic notes, assignments, and official notices quickly.\n\n"
@@ -408,4 +405,4 @@ async def broadcast_target_chosen(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     target = query.data
-    if target == "broadcast_a
+    if target == "
