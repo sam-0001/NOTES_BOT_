@@ -284,7 +284,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    db = context.application.persistence.db
     if query.data == "stats_quick":
         reply_keyboard = [["1st Year", "2nd Year"], ["3rd Year", "4th Year"]]
         await query.message.reply_text(
@@ -295,6 +294,7 @@ async def stats_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return STATS_AWAITING_YEAR
     elif query.data == "stats_export_users":
         await query.edit_message_text("Generating user report, please wait...")
+        db = context.application.persistence.db
         user_docs = list(db["user_data"].find({}))
         user_list = [doc.get('data', {}) for doc in user_docs]
         if not user_list:
@@ -338,6 +338,7 @@ async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @owner_only
 async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the interactive file fetching process for admins."""
     is_notes = update.message.text.startswith("/getnotes")
     context.user_data['admin_command_type'] = "notes" if is_notes else "assignments"
     service = get_drive_service()
