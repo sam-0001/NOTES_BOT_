@@ -31,7 +31,6 @@ class MongoPersistence(BasePersistence):
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
         self.access_logs_collection = self.db["access_logs"]
-        self.authorized_emails_collection = self.db["authorized_emails"]
 
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
@@ -88,22 +87,13 @@ async def main_setup() -> None:
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
-            h.AWAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.receive_email)],
             config.ASK_YEAR: [MessageHandler(filters.Regex(r"^(1st|2nd|3rd|4th) Year$"), h.received_year)],
             config.ASK_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_branch)],
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
-        fallbacks=[CommandHandler("cancel", h.cancel_onboarding)],
-        persistent=True, name="full_onboarding_conv"
+        fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
     )
-    stats_conv = ConversationHandler(
-        entry_points=[CommandHandler("stats", h.stats_command)],
-        states={
-            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)],
-            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)]
-        },
-        fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
-    )
+    
     feedback_conv = ConversationHandler(
         entry_points=[CommandHandler("suggest", h.suggestion_start)],
         states={
@@ -137,12 +127,12 @@ async def main_setup() -> None:
 
     # --- Register All Handlers ---
     application.add_handler(setup_conv)
-    application.add_handler(stats_conv)
     application.add_handler(feedback_conv)
     application.add_handler(broadcast_conv)
-    application.add_handler(admin_file_conv) # <-- Register the new admin conversation
+    application.add_handler(admin_file_conv)
     
     application.add_handler(CommandHandler("help", h.help_command))
+    application.add_handler(CommandHandler("stats", h.stats_command))
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
