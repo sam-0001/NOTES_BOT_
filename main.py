@@ -23,7 +23,6 @@ import handlers as h
 
 # --- Custom MongoDB Persistence Class ---
 class MongoPersistence(BasePersistence):
-    # ... (class content is correct and unchanged)
     def __init__(self, mongo_url: str, db_name: str = "telegram_bot_db"):
         super().__init__()
         self.client = MongoClient(mongo_url)
@@ -32,7 +31,9 @@ class MongoPersistence(BasePersistence):
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
         self.access_logs_collection = self.db["access_logs"]
+        self.authorized_emails_collection = self.db["authorized_emails"] # <-- For secure onboarding
 
+    # ... (All other methods in the class remain unchanged)
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
         return doc.get("data", {}) if doc else {}
@@ -84,17 +85,29 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # --- Main Bot Logic & Webhooks ---
 async def main_setup() -> None:
     """Initializes the bot and registers all handlers."""
-    # Conversation handlers
+    # --- UPDATED Onboarding Conversation Handler ---
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
+            h.AWAIT_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.receive_email)],
             config.ASK_YEAR: [MessageHandler(filters.Regex(r"^(1st|2nd|3rd|4th) Year$"), h.received_year)],
             config.ASK_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_branch)],
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
-        fallbacks=[CommandHandler("start", h.start)], persistent=True, name="setup_conv"
+        fallbacks=[CommandHandler("cancel", h.cancel_onboarding)],
+        persistent=True,
+        name="full_onboarding_conv"
     )
 
+    # ... (All other conversation handlers: stats, feedback, broadcast, admin files, remain unchanged) ...
+    stats_conv = ConversationHandler(
+        entry_points=[CommandHandler("stats", h.stats_command)],
+        states={
+            h.CHOOSING_STAT: [CallbackQueryHandler(h.stats_callback_handler)],
+            h.STATS_AWAITING_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.stats_receive_year)]
+        },
+        fallbacks=[CommandHandler("stats", h.stats_command)], persistent=False, name="stats_conv"
+    )
     feedback_conv = ConversationHandler(
         entry_points=[CommandHandler("suggest", h.suggestion_start)],
         states={
@@ -113,23 +126,33 @@ async def main_setup() -> None:
         },
         fallbacks=[CommandHandler("cancel", h.cancel_broadcast)], persistent=False, name="broadcast_conv"
     )
+    admin_file_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("getnotes", h.admin_get_files_start),
+            CommandHandler("getassignments", h.admin_get_files_start)
+        ],
+        states={
+            h.ADMIN_CHOOSE_YEAR: [CallbackQueryHandler(h.admin_year_chosen, pattern="^admin_year_")],
+            h.ADMIN_CHOOSE_BRANCH: [CallbackQueryHandler(h.admin_branch_chosen, pattern="^admin_branch_")],
+            h.ADMIN_CHOOSE_SUBJECT: [CallbackQueryHandler(h.admin_subject_chosen, pattern="^admin_subject_")],
+        },
+        fallbacks=[], persistent=False, name="admin_file_conv"
+    )
 
-    # --- Register all handlers ---
+    # Register all handlers
     application.add_handler(setup_conv)
-    # The stats_conv has been removed
+    application.add_handler(stats_conv)
     application.add_handler(feedback_conv)
     application.add_handler(broadcast_conv)
+    application.add_handler(admin_file_conv)
     
     application.add_handler(CommandHandler("help", h.help_command))
-    application.add_handler(CommandHandler("stats", h.stats_command)) # <-- Replaced with a simple CommandHandler
     application.add_handler(CommandHandler("reset", h.reset_command))
     application.add_handler(CommandHandler("myinfo", h.myinfo_command))
     application.add_handler(CommandHandler("leaderboard", h.leaderboard_command))
     application.add_handler(CommandHandler("notice", h.get_notice_command))
     application.add_handler(CommandHandler("notes", h.file_selection_command))
     application.add_handler(CommandHandler("assignments", h.file_selection_command))
-    application.add_handler(CommandHandler("getnotes", h.admin_get_files_command))
-    application.add_handler(CommandHandler("getassignments", h.admin_get_files_command))
     
     application.add_handler(CallbackQueryHandler(h.button_handler))
 
