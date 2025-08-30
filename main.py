@@ -31,9 +31,8 @@ class MongoPersistence(BasePersistence):
         self.chat_data_collection = self.db["chat_data"]
         self.bot_data_collection = self.db["bot_data"]
         self.access_logs_collection = self.db["access_logs"]
-        self.authorized_emails_collection = self.db["authorized_emails"] # <-- For secure onboarding
+        self.authorized_emails_collection = self.db["authorized_emails"]
 
-    # ... (All other methods in the class remain unchanged)
     async def get_bot_data(self):
         doc = self.bot_data_collection.find_one({"_id": "bot_data_singleton"})
         return doc.get("data", {}) if doc else {}
@@ -85,7 +84,7 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # --- Main Bot Logic & Webhooks ---
 async def main_setup() -> None:
     """Initializes the bot and registers all handlers."""
-    # --- UPDATED Onboarding Conversation Handler ---
+    # --- Conversation Handlers ---
     setup_conv = ConversationHandler(
         entry_points=[CommandHandler("start", h.start)],
         states={
@@ -95,11 +94,8 @@ async def main_setup() -> None:
             config.ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, h.received_name)],
         },
         fallbacks=[CommandHandler("cancel", h.cancel_onboarding)],
-        persistent=True,
-        name="full_onboarding_conv"
+        persistent=True, name="full_onboarding_conv"
     )
-
-    # ... (All other conversation handlers: stats, feedback, broadcast, admin files, remain unchanged) ...
     stats_conv = ConversationHandler(
         entry_points=[CommandHandler("stats", h.stats_command)],
         states={
@@ -139,12 +135,12 @@ async def main_setup() -> None:
         fallbacks=[], persistent=False, name="admin_file_conv"
     )
 
-    # Register all handlers
+    # --- Register All Handlers ---
     application.add_handler(setup_conv)
     application.add_handler(stats_conv)
     application.add_handler(feedback_conv)
     application.add_handler(broadcast_conv)
-    application.add_handler(admin_file_conv)
+    application.add_handler(admin_file_conv) # <-- Register the new admin conversation
     
     application.add_handler(CommandHandler("help", h.help_command))
     application.add_handler(CommandHandler("reset", h.reset_command))
