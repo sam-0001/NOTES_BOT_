@@ -1,4 +1,4 @@
-# handlers.py - Part 1 of 5
+# handlers.py - Part 1 of 2
 
 import io
 import random
@@ -90,9 +90,6 @@ async def received_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data['available_branches'] = branch_names
     return config.ASK_BRANCH
 
-# (Continued in Part 2)
-# (Continued from Part 1)
-
 async def received_branch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_branch = update.message.text
     if user_branch not in context.user_data.get('available_branches', []):
@@ -107,12 +104,16 @@ async def received_branch(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def received_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['name'] = update.message.text.strip()
+    context.user_data['points'] = 0 # Initialize points
     await update.message.reply_text(
         f"✅ Thanks, {context.user_data['name']}! Your setup is complete.\n\nType /help to see all commands."
     )
     if 'available_branches' in context.user_data:
         del context.user_data['available_branches']
     return ConversationHandler.END
+
+# (Continued in Part 2)
+# (Continued from Part 1)
 
 # --- Standard User Commands ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -168,9 +169,6 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("🏆 Fetching the leaderboard...")
     leaderboard_text = get_leaderboard_text(context)
     await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
-
-# (Continued in Part 3)
-# (Continued from Part 2)
 
 # --- In-App Feedback Conversation ---
 async def suggestion_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -249,9 +247,6 @@ async def file_selection_command(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         config.logger.error(f"Error in file_selection_command: {e}")
         await update.message.reply_text("❗️ An error occurred. Please try again later.")
-
-# (Continued in Part 4)
-# (Continued from Part 3)
 
 @rate_limit(limit_seconds=5, max_calls=1)
 async def get_notice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -347,6 +342,7 @@ async def stats_receive_year(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @owner_only
 async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Starts the interactive file fetching process for admins."""
     is_notes = update.message.text.startswith("/getnotes")
     context.user_data['admin_command_type'] = "notes" if is_notes else "assignments"
     service = get_drive_service()
@@ -357,9 +353,6 @@ async def admin_get_files_start(update: Update, context: ContextTypes.DEFAULT_TY
     keyboard = [[InlineKeyboardButton(year['name'], callback_data=f"admin_year_{year['id']}")] for year in years]
     await update.message.reply_text("Please choose a year:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ADMIN_CHOOSE_YEAR
-
-# (Continued in Part 5)
-# (Continued from Part 4)
 
 async def admin_year_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -510,6 +503,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         service = get_drive_service()
         if not service:
+            await query.edit_message_
+# (Continued from the previous part)
+
             await query.edit_message_text("Could not connect to Google Drive right now.")
             return
         subfolder_name = "Notes" if command_type == "notes" else "Assignments"
