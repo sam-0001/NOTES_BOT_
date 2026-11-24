@@ -107,9 +107,15 @@ async def init_db() -> None:
         unique=True,
         background=True,
     )
+    user_indexes = await users_col.index_information()
+    if "chat_id_1" in user_indexes and not user_indexes["chat_id_1"].get("sparse"):
+        await users_col.drop_index("chat_id_1")
+    if "mobile_1" in user_indexes and not user_indexes["mobile_1"].get("sparse"):
+        await users_col.drop_index("mobile_1")
+
     await users_col.create_index("mobile", unique=True, sparse=True)
-    await users_col.create_index("chat_id", unique=True)
-    await referrals_col.create_index("referred_chat_id", unique=True)
+    await users_col.create_index("chat_id", unique=True, sparse=True)
+    await referrals_col.create_index("referred_chat_id", unique=True, sparse=True)
     await referrals_col.create_index("referrer_chat_id")
 
     logger.info("MongoDB connected and collection indexes verified.")
