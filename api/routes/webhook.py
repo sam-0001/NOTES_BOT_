@@ -59,9 +59,10 @@ async def cashfree_webhook(request: Request) -> dict:
     # 1. Cashfree Payment Link event
     if event_type == "PAYMENT_LINK_EVENT":
         link_status = str(data.get("link_status", "")).upper()
-        if link_status != "PAID":
-            logger.info("Cashfree payment link status '%s' ignored (waiting for PAID).", link_status)
-            return {"status": "ignored", "link_status": link_status}
+        order_status = str(data.get("order", {}).get("transaction_status", "")).upper()
+        if link_status != "PAID" and order_status != "SUCCESS":
+            logger.info("Cashfree payment link status '%s' / order '%s' ignored.", link_status, order_status)
+            return {"status": "ignored", "link_status": link_status, "order_status": order_status}
         notes = (
             data.get("link_notes")
             or data.get("order", {}).get("order_tags")
