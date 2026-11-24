@@ -18,10 +18,28 @@ BOT_TOKEN: str       = os.getenv("BOT_TOKEN", "")
 ADMIN_ID: int        = int(os.getenv("ADMIN_ID", "0"))
 STORAGE_GROUP_ID: str = os.getenv("STORAGE_GROUP_ID", "")
 
-# ── Razorpay ──────────────────────────────────────────────────────────────────
-RAZORPAY_KEY_ID: str        = os.getenv("RAZORPAY_KEY_ID", "")
-RAZORPAY_KEY_SECRET: str    = os.getenv("RAZORPAY_KEY_SECRET", "")
-RAZORPAY_WEBHOOK_SECRET: str = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+# ── Cashfree ──────────────────────────────────────────────────────────────────
+CASHFREE_APP_ID: str         = (
+    os.getenv("CASHFREE_APP_ID")
+    or os.getenv("CASHFREE_CLIENT_ID")
+    or ""
+)
+CASHFREE_SECRET_KEY: str     = (
+    os.getenv("CASHFREE_SECRET_KEY")
+    or os.getenv("CASHFREE_CLIENT_SECRET")
+    or ""
+)
+CASHFREE_WEBHOOK_SECRET: str = (
+    os.getenv("CASHFREE_WEBHOOK_SECRET")
+    or CASHFREE_SECRET_KEY
+)
+CASHFREE_API_VERSION: str    = os.getenv("CASHFREE_API_VERSION", "2023-08-01")
+CASHFREE_ENV: str            = os.getenv("CASHFREE_ENV", "PRODUCTION").upper()
+
+# Backward compatibility aliases
+RAZORPAY_KEY_ID: str        = os.getenv("RAZORPAY_KEY_ID", CASHFREE_APP_ID)
+RAZORPAY_KEY_SECRET: str    = os.getenv("RAZORPAY_KEY_SECRET", CASHFREE_SECRET_KEY)
+RAZORPAY_WEBHOOK_SECRET: str = os.getenv("RAZORPAY_WEBHOOK_SECRET", CASHFREE_WEBHOOK_SECRET)
 
 # ── Server ────────────────────────────────────────────────────────────────────
 PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")

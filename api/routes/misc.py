@@ -2,7 +2,7 @@
 api/routes/misc.py
 ~~~~~~~~~~~~~~~~~~
 Miscellaneous FastAPI routes:
-  GET /payment-success  – browser redirect page after Razorpay checkout
+  GET /payment-success  – browser redirect page after Cashfree checkout
   GET /keep-alive       – uptime-monitor ping endpoint
 """
 

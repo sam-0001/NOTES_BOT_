@@ -43,7 +43,7 @@ from db.queries import (
     set_promo_message,
     set_referral_threshold,
 )
-from services.razorpay import create_payment_link
+from services.cashfree import create_payment_link
 from utils.sections import (
     get_sections,
     has_section_access,

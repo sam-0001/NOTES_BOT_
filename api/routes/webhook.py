@@ -1,9 +1,11 @@
 """
 api/routes/webhook.py
 ~~~~~~~~~~~~~~~~~~~~~
-POST /razorpay-webhook
+POST /cashfree-webhook
+POST /webhook
+POST /razorpay-webhook (legacy alias)
 
-Verifies the Razorpay HMAC signature, records the order, and delivers
+Verifies the Cashfree HMAC signature, records the order, and delivers
 study materials to the buyer via Telegram.
 """
 
@@ -19,37 +21,81 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.instance import bot
 from config import ADMIN_ID
 from db.queries import async_fetch_subject, async_record_order
-from services.razorpay import verify_webhook_signature
+from services.cashfree import verify_webhook_signature
 from utils.sections import get_sections, section_price
 
 logger = logging.getLogger("unieval")
 router = APIRouter()
 
 
+@router.post("/cashfree-webhook")
+@router.post("/webhook")
 @router.post("/razorpay-webhook")
-async def razorpay_webhook(request: Request) -> dict:
+async def cashfree_webhook(request: Request) -> dict:
     body      = await request.body()
-    signature = request.headers.get("x-razorpay-signature", "")
+    signature = (
+        request.headers.get("x-webhook-signature")
+        or request.headers.get("x-razorpay-signature")
+        or ""
+    )
+    timestamp = request.headers.get("x-webhook-timestamp", "")
 
-    if not verify_webhook_signature(body, signature):
-        logger.warning("Razorpay webhook: invalid signature received.")
+    if not verify_webhook_signature(body, signature, timestamp):
+        logger.warning("Payment webhook: invalid or missing signature.")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
-        logger.error("Razorpay webhook: failed to parse JSON — %s", exc)
+        logger.error("Payment webhook: failed to parse JSON — %s", exc)
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    event = payload.get("event")
-    logger.info("Razorpay webhook event: %s", event)
+    event_type = payload.get("type") or payload.get("event")
+    logger.info("Payment webhook event received: %s", event_type)
 
-    if event != "payment_link.paid":
-        return {"status": "ignored", "event": event}
+    data = payload.get("data", {})
+    notes: dict = {}
 
-    entity = payload["payload"]["payment_link"]["entity"]
-    notes  = entity.get("notes", {})
-    logger.info("Webhook notes: %s", notes)
+    # 1. Cashfree Payment Link event
+    if event_type == "PAYMENT_LINK_EVENT":
+        link_status = str(data.get("link_status", "")).upper()
+        if link_status != "PAID":
+            logger.info("Cashfree payment link status '%s' ignored (waiting for PAID).", link_status)
+            return {"status": "ignored", "link_status": link_status}
+        notes = (
+            data.get("link_notes")
+            or data.get("order", {}).get("order_tags")
+            or {}
+        )
+
+    # 2. Cashfree Payment Success webhook
+    elif event_type == "PAYMENT_SUCCESS_WEBHOOK":
+        payment_status = str(data.get("payment", {}).get("payment_status", "")).upper()
+        if payment_status != "SUCCESS":
+            logger.info("Cashfree payment status '%s' ignored.", payment_status)
+            return {"status": "ignored", "payment_status": payment_status}
+        order = data.get("order", {})
+        notes = (
+            order.get("order_tags")
+            or order.get("link_notes")
+            or data.get("link_notes")
+            or {}
+        )
+
+    # 3. Legacy Razorpay event fallback
+    elif event_type == "payment_link.paid":
+        entity = payload.get("payload", {}).get("payment_link", {}).get("entity", {})
+        notes = entity.get("notes", {})
+
+    # 4. Generic fallback: check if notes exist in data
+    elif "link_notes" in data or "order_tags" in data.get("order", {}):
+        notes = data.get("link_notes") or data.get("order", {}).get("order_tags") or {}
+
+    else:
+        logger.info("Webhook event '%s' ignored.", event_type)
+        return {"status": "ignored", "event": event_type}
+
+    logger.info("Webhook extracted notes: %s", notes)
 
     if "chat_id" not in notes or "subject_id" not in notes:
         return {"status": "ignored_safely", "message": "Missing required notes fields"}

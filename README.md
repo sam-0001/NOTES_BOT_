@@ -5,7 +5,7 @@ A Telegram bot backend for selling and delivering study materials, built with:
 - **pyTelegramBotAPI** – Telegram bot framework
 - **FastAPI** – async web server / webhook receiver
 - **Motor** – async MongoDB driver
-- **Razorpay** – payment links (pure HTTP)
+- **Cashfree** – payment links (pure HTTP)
 
 ---
 
@@ -25,7 +25,7 @@ unieval/
 │   └── queries.py              # All DB query helpers (sync + async)
 │
 ├── services/
-│   ├── razorpay.py             # Payment link creation
+│   ├── cashfree.py             # Payment link creation & webhook verification
 │   └── broadcast.py            # New-material broadcast logic
 │
 ├── bot/
@@ -42,7 +42,7 @@ unieval/
 │   ├── app.py                  # FastAPI app factory + lifespan
 │   └── routes/
 │       ├── __init__.py
-│       ├── webhook.py          # POST /razorpay-webhook
+│       ├── webhook.py          # POST /cashfree-webhook (and /webhook)
 │       └── misc.py             # GET /payment-success, /keep-alive
 │
 └── utils/
@@ -55,6 +55,7 @@ unieval/
 
 ### 1. Install dependencies
 ```bash
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -80,10 +81,12 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `BOT_TOKEN` | Telegram bot token from @BotFather |
 | `ADMIN_ID` | Your Telegram numeric user ID |
 | `STORAGE_GROUP_ID` | Telegram group ID used as file storage |
-| `RAZORPAY_KEY_ID` | Razorpay API key ID |
-| `RAZORPAY_KEY_SECRET` | Razorpay API key secret |
-| `RAZORPAY_WEBHOOK_SECRET` | Razorpay webhook signing secret |
-| `PUBLIC_BASE_URL` | Your server's public URL (for payment callbacks) |
+| `CASHFREE_APP_ID` | Cashfree App / Client ID (from Merchant Dashboard) |
+| `CASHFREE_SECRET_KEY` | Cashfree Secret / Client Key |
+| `CASHFREE_WEBHOOK_SECRET` | Optional: Webhook secret (defaults to `CASHFREE_SECRET_KEY`) |
+| `CASHFREE_ENV` | `PRODUCTION` or `SANDBOX` (default: `PRODUCTION`) |
+| `CASHFREE_API_VERSION` | Cashfree API version (default: `2023-08-01`) |
+| `PUBLIC_BASE_URL` | Your server's public URL (for payment links & webhook callbacks) |
 | `MONGO_URI` | MongoDB connection string |
 
 ---
@@ -119,7 +122,7 @@ From `/admin`:
 3. Tap the settings button for a section.
 4. Choose **Make Free** or **Make Paid / Set Price**.
 
-Users can open a subject and see each section as unlocked, free, or locked with its own price. Razorpay section payments unlock only that section. If a subject is free but one section is paid, the paid section still requires payment before notes are delivered.
+Users can open a subject and see each section as unlocked, free, or locked with its own price. Cashfree section payments unlock only that section. If a subject is free but one section is paid, the paid section still requires payment before notes are delivered.
 
 ### User
 ```json
