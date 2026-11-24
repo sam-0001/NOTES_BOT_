@@ -3,7 +3,7 @@ services/cashfree.py
 ~~~~~~~~~~~~~~~~~~~~
 Pure-HTTP Cashfree Payment Gateway integration (PG v2023-08-01).
 Responsibilities:
-1. Create a payment link and return its hosted checkout URL.
+1. Create a payment link or hosted checkout session URL.
 2. Verify webhook signatures against the Cashfree secret key.
 """
 
@@ -29,11 +29,11 @@ from config import (
 from db.queries import fetch_user_by_chat
 
 
-def _get_api_endpoint() -> str:
-    """Return Cashfree payment links endpoint based on environment."""
-    if CASHFREE_ENV in ("SANDBOX", "TEST") or CASHFREE_APP_ID.startswith("TEST"):
-        return "https://sandbox.cashfree.com/pg/links"
-    return "https://api.cashfree.com/pg/links"
+def _get_api_endpoint(resource: str = "links") -> str:
+    """Return Cashfree endpoint based on environment and resource (links or orders)."""
+    is_test = CASHFREE_ENV in ("SANDBOX", "TEST") or CASHFREE_APP_ID.startswith("TEST")
+    base = "https://sandbox.cashfree.com/pg" if is_test else "https://api.cashfree.com/pg"
+    return f"{base}/{resource}"
 
 
 def _get_customer_phone(chat_id: str) -> str:
@@ -49,6 +49,78 @@ def _get_customer_phone(chat_id: str) -> str:
     return "9999999999"
 
 
+def _create_via_orders_api(
+    chat_id: str,
+    subject_id: str,
+    subject_name: str,
+    price_inr: int,
+    section_idx: int | None = None,
+    section_name: str | None = None,
+) -> str:
+    """
+    Fallback when Cashfree's Payment Links API is not enabled on merchant account.
+    Uses standard Cashfree Orders API (POST /pg/orders) and returns the hosted checkout URL.
+    """
+    description = f"Purchase: {subject_name}"
+    order_tags: dict[str, str] = {
+        "chat_id": str(chat_id),
+        "subject_id": str(subject_id),
+    }
+    if section_idx is not None:
+        description = f"Purchase: {subject_name} - {section_name or 'Section'}"
+        order_tags["section_idx"] = str(section_idx)
+
+    ts = int(time.time())
+    safe_cid = str(chat_id).replace("-", "m")
+    uid = uuid.uuid4().hex[:6]
+    order_id = f"ord_{safe_cid[:15]}_{ts}_{uid}"[:45]
+
+    phone = _get_customer_phone(chat_id)
+
+    payload: dict = {
+        "order_id": order_id,
+        "order_amount": float(price_inr),
+        "order_currency": "INR",
+        "customer_details": {
+            "customer_id": f"tg_{chat_id}"[:50],
+            "customer_phone": phone,
+        },
+        "order_tags": order_tags,
+        "order_note": description[:100],
+    }
+
+    if PUBLIC_BASE_URL:
+        payload["order_meta"] = {
+            "notify_url": f"{PUBLIC_BASE_URL}/cashfree-webhook",
+            "return_url": f"{PUBLIC_BASE_URL}/payment-success?order_id={{order_id}}",
+        }
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-api-version": CASHFREE_API_VERSION,
+        "x-client-id": CASHFREE_APP_ID,
+        "x-client-secret": CASHFREE_SECRET_KEY,
+    }
+
+    endpoint = _get_api_endpoint("orders")
+    logger.info("Creating Cashfree Order fallback for chat_id=%s, amount=₹%s", chat_id, price_inr)
+
+    resp = requests.post(endpoint, json=payload, headers=headers, timeout=15)
+    if not resp.ok:
+        logger.error("Cashfree Orders API error (%d): %s", resp.status_code, resp.text)
+        raise RuntimeError(f"Cashfree API error {resp.status_code}: {resp.text}")
+
+    resp_data = resp.json()
+    session_id = resp_data.get("payment_session_id")
+    if not session_id:
+        logger.error("Cashfree response missing payment_session_id: %s", resp_data)
+        raise RuntimeError(f"Cashfree response missing payment_session_id: {resp_data}")
+
+    base_url = PUBLIC_BASE_URL.rstrip("/") if PUBLIC_BASE_URL else ""
+    return f"{base_url}/checkout?session_id={session_id}"
+
+
 def create_payment_link(
     chat_id: str,
     subject_id: str,
@@ -58,9 +130,9 @@ def create_payment_link(
     section_name: str | None = None,
 ) -> str:
     """
-    Create a Cashfree payment link and return the hosted checkout URL.
-
-    Raises RuntimeError if the API call fails or keys are missing.
+    Create a Cashfree payment link and return the checkout URL.
+    Attempts /pg/links first; if the feature is not enabled on the merchant account,
+    automatically falls back to /pg/orders.
     """
     if not CASHFREE_APP_ID or not CASHFREE_SECRET_KEY:
         raise RuntimeError("Cashfree credentials (CASHFREE_APP_ID / CASHFREE_SECRET_KEY) are not set in .env")
@@ -108,7 +180,7 @@ def create_payment_link(
         "x-client-secret": CASHFREE_SECRET_KEY,
     }
 
-    endpoint = _get_api_endpoint()
+    endpoint = _get_api_endpoint("links")
     logger.info("Creating Cashfree payment link for chat_id=%s, amount=₹%s", chat_id, price_inr)
 
     resp = requests.post(
@@ -119,6 +191,18 @@ def create_payment_link(
     )
 
     if not resp.ok:
+        # If payment links API is disabled on this Cashfree merchant account, fallback to Orders API
+        if "link_creation_api" in resp.text or "feature_not_enabled" in resp.text:
+            logger.info("PaymentLink API not enabled on Cashfree account; using Orders API fallback.")
+            return _create_via_orders_api(
+                chat_id=chat_id,
+                subject_id=subject_id,
+                subject_name=subject_name,
+                price_inr=price_inr,
+                section_idx=section_idx,
+                section_name=section_name,
+            )
+
         logger.error("Cashfree API error (%d): %s", resp.status_code, resp.text)
         raise RuntimeError(f"Cashfree API error {resp.status_code}: {resp.text}")
 
