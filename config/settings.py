@@ -16,7 +16,8 @@ load_dotenv()
 # ── Telegram ──────────────────────────────────────────────────────────────────
 BOT_TOKEN: str       = os.getenv("BOT_TOKEN", "")
 ADMIN_ID: int        = int(os.getenv("ADMIN_ID", "0"))
-STORAGE_GROUP_ID: str = os.getenv("STORAGE_GROUP_ID", "")
+_raw_storage = os.getenv("STORAGE_GROUP_ID", "").strip()
+STORAGE_GROUP_ID: int | str = int(_raw_storage) if _raw_storage.lstrip("-").isdigit() else _raw_storage
 
 # ── Cashfree ──────────────────────────────────────────────────────────────────
 CASHFREE_APP_ID: str         = (
