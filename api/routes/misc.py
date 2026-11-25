@@ -77,9 +77,9 @@ _CHECKOUT_HTML = """<!DOCTYPE html>
         <button id="payBtn" class="btn">Click here if not redirected</button>
     </div>
     <script>
-        const mode = "%(mode)s";
+        const mode = "{{ mode }}";
         const cashfree = Cashfree({ mode: mode });
-        const paymentSessionId = "%(session_id)s";
+        const paymentSessionId = "{{ session_id }}";
 
         function launchCheckout() {
             cashfree.checkout({
@@ -152,10 +152,11 @@ async def checkout(request: Request, session_id: str = "") -> HTMLResponse:
     is_test = CASHFREE_ENV in ("SANDBOX", "TEST") or CASHFREE_APP_ID.startswith("TEST")
     mode = "sandbox" if is_test else "production"
 
-    html = _CHECKOUT_HTML % {
-        "mode": mode,
-        "session_id": session_id,
-    }
+    html = (
+        _CHECKOUT_HTML
+        .replace("{{ mode }}", mode)
+        .replace("{{ session_id }}", session_id)
+    )
     return HTMLResponse(content=html)
 
 
