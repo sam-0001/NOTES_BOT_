@@ -1,5 +1,8 @@
+name: tg_notes_bot
+
 services:
   tg_notes_bot:
+    image: tg_notes_bot:latest
     build: .
     container_name: tg_notes_bot
     restart: unless-stopped
