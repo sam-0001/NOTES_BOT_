@@ -37,6 +37,7 @@ from db.queries import (
     set_referral_threshold,
 )
 from services.broadcast import broadcast_batch
+from services.storage import copy_to_storage, get_storage_candidates
 from utils.sections import get_sections
 
 
@@ -376,14 +377,22 @@ def handle_message(message: telebot.types.Message) -> None:
         bot.send_message(cid, "⏳ Uploading to storage…")
 
         try:
-            storage_msg     = bot.copy_message(
-                chat_id=STORAGE_GROUP_ID,
-                from_chat_id=cid,
-                message_id=message.message_id,
-            )
+            storage_msg     = copy_to_storage(from_chat_id=cid, message_id=message.message_id)
             file_message_id = str(storage_msg.message_id)
         except Exception as exc:
-            bot.send_message(cid, f"❌ Failed to copy to storage group: {exc}")
+            import config.settings as s
+            candidates = get_storage_candidates()
+            bot.send_message(
+                cid,
+                f"❌ <b>Failed to copy to storage group:</b>\n<code>{exc}</code>\n\n"
+                f"• <b>Configured ID:</b> <code>{s.STORAGE_GROUP_ID}</code>\n"
+                f"• <b>Tested candidate IDs:</b> <code>{candidates}</code>\n\n"
+                f"👉 <b>How to fix in 1 minute:</b>\n"
+                f"1. Make sure this bot is an <b>Administrator</b> in your storage group with 'Post Messages' rights\n"
+                f"2. Send <code>/chatid</code> inside that storage group to get the exact ID\n"
+                f"3. Run <code>/test_storage</code> here to verify connection before uploading again",
+                parse_mode="HTML",
+            )
             return  # keep state open so admin can retry
 
         run_async(async_push_file_to_section(subject_id, section_idx, file_message_id))

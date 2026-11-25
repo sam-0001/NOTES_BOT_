@@ -11,7 +11,8 @@ from bot.instance import bot
 from bot.cleanup import send_tracked, sweep
 from bot.keyboards import contact_keyboard, user_subjects_keyboard, purchased_subjects_keyboard
 from bot.state import clear_state, pop_pending_referral, set_pending_referral
-from config import ADMIN_ID
+from config import ADMIN_ID, STORAGE_GROUP_ID, logger
+from services.storage import test_storage_connection
 from db.queries import (
     fetch_all_subjects,
     fetch_user_by_chat,
@@ -247,15 +248,82 @@ def cmd_admin(message: telebot.types.Message) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /myid
+# /myid, /chatid, /id, /groupid, /storageid
 # ---------------------------------------------------------------------------
 
-@bot.message_handler(commands=["myid"])
+@bot.message_handler(commands=["myid", "chatid", "id", "groupid", "storageid"])
 def cmd_myid(message: telebot.types.Message) -> None:
-    bot.send_message(
+    chat_title = getattr(message.chat, "title", None) or ("Private DM" if message.chat.type == "private" else message.chat.type)
+    text = (
+        f"📍 <b>Chat Details:</b>\n\n"
+        f"• <b>Title:</b> {chat_title}\n"
+        f"• <b>Chat ID:</b> <code>{message.chat.id}</code>\n"
+        f"• <b>Chat Type:</b> <code>{message.chat.type}</code>\n"
+        f"• <b>Your User ID:</b> <code>{message.from_user.id}</code>\n\n"
+        f"💡 <b>To use this chat for storage in .env:</b>\n"
+        f"<code>STORAGE_GROUP_ID={message.chat.id}</code>"
+    )
+    bot.reply_to(message, text, parse_mode="HTML")
+
+
+# ---------------------------------------------------------------------------
+# /test_storage — admin diagnostic to verify storage group connectivity
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["test_storage", "teststorage"])
+def cmd_test_storage(message: telebot.types.Message) -> None:
+    if message.from_user.id != ADMIN_ID:
+        return
+    import config.settings as s
+    status_msg = bot.send_message(
         message.chat.id,
-        f"Your Telegram ID is: `{message.from_user.id}`",
-        parse_mode="Markdown",
+        f"⏳ Testing storage group with configured ID: <code>{s.STORAGE_GROUP_ID}</code>...",
+        parse_mode="HTML",
+    )
+    success, res = test_storage_connection()
+    if success:
+        bot.edit_message_text(
+            f"✅ <b>Storage Group Connected Successfully!</b>\n\n"
+            f"• <b>Storage Chat ID:</b> <code>{res['id']}</code>\n"
+            f"• <b>Title:</b> {res['title']}\n"
+            f"• <b>Type:</b> {res['type']}\n\n"
+            f"🎉 Storage is ready! You can now upload notes via /admin.",
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            parse_mode="HTML",
+        )
+    else:
+        bot.edit_message_text(
+            f"❌ <b>Storage Group Connection Failed!</b>\n\n"
+            f"<code>{res['error']}</code>\n\n"
+            f"• <b>Tested candidates:</b> <code>{res['candidates']}</code>\n\n"
+            f"👉 <b>How to fix in 1 minute:</b>\n"
+            f"1. Open your storage group/channel (e.g. <code>UniEval_private</code>)\n"
+            f"2. Make sure this bot is an <b>Administrator</b> with 'Post Messages' permission\n"
+            f"3. Send <code>/chatid</code> inside that group\n"
+            f"4. Put that exact Chat ID in your server's <code>.env</code>:\n"
+            f"   <code>STORAGE_GROUP_ID=&lt;id&gt;</code>\n"
+            f"5. Recreate Docker container:\n"
+            f"   <code>docker compose down &amp;&amp; docker compose up -d</code>",
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id,
+            parse_mode="HTML",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bot membership updates (group additions / admin promotions)
+# ---------------------------------------------------------------------------
+
+@bot.my_chat_member_handler()
+def handle_bot_membership_update(event: telebot.types.ChatMemberUpdated) -> None:
+    chat_title = getattr(event.chat, "title", "N/A")
+    logger.info(
+        "Bot membership updated in chat %s (%s, type: %s): status=%s",
+        event.chat.id,
+        chat_title,
+        event.chat.type,
+        event.new_chat_member.status,
     )
 
 

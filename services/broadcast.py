@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import time
 
-from config import STORAGE_GROUP_ID, logger
+from config import logger
+from services.storage import copy_from_storage
 from db.queries import fetch_buyers, fetch_subject, fetch_user_orders
 from utils.sections import get_sections, has_section_access, is_section_free, section_price
 
@@ -71,11 +72,13 @@ def broadcast_batch(
                     parse_mode="Markdown",
                 )
                 for mid in new_file_ids:
-                    bot.copy_message(
-                        chat_id=int(chat_cid),
-                        from_chat_id=STORAGE_GROUP_ID,
-                        message_id=int(mid),
-                    )
+                    try:
+                        copy_from_storage(
+                            to_chat_id=int(chat_cid),
+                            message_id=int(mid),
+                        )
+                    except Exception as exc:
+                        logger.error("Broadcast failed for chat %s msg %s: %s", chat_cid, mid, exc)
                     time.sleep(0.05)
                 for note_text in new_texts:
                     bot.send_message(int(chat_cid), note_text)

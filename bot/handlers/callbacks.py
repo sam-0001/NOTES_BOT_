@@ -27,6 +27,7 @@ from bot.keyboards import (
 from bot.state import clear_state, get_context, set_state
 from bot.handlers.messages import finish_upload, finish_text_upload
 from config import ADMIN_ID, STORAGE_GROUP_ID, logger
+from services.storage import copy_from_storage
 from db.client import run_async
 from db.queries import (
     async_delete_subject,
@@ -755,9 +756,8 @@ def handle_callback(call: telebot.types.CallbackQuery) -> None:
         )
         for msg_id_str in file_ids:
             try:
-                bot.copy_message(
-                    chat_id=cid,
-                    from_chat_id=STORAGE_GROUP_ID,
+                copy_from_storage(
+                    to_chat_id=cid,
                     message_id=int(msg_id_str),
                 )
             except Exception as exc:
@@ -814,9 +814,8 @@ def handle_callback(call: telebot.types.CallbackQuery) -> None:
             send_tracked(bot, cid, f"📤 Sending *{subject['name']}* notes…", parse_mode="Markdown")
             for msg_id_str in all_ids:
                 try:
-                    bot.copy_message(
-                        chat_id=cid,
-                        from_chat_id=STORAGE_GROUP_ID,
+                    copy_from_storage(
+                        to_chat_id=cid,
                         message_id=int(msg_id_str),
                     )
                 except Exception as exc:

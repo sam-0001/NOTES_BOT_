@@ -27,7 +27,11 @@ def _run_bot() -> None:
     logger.info("Telegram bot polling loop started.")
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+            bot.infinity_polling(
+                timeout=60,
+                long_polling_timeout=30,
+                allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post", "callback_query", "my_chat_member", "chat_member"]
+            )
         except Exception as exc:
             logger.error("Bot polling crashed: %s — restarting in 5s", exc)
             time.sleep(5)
