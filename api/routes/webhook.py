@@ -36,9 +36,12 @@ async def cashfree_webhook(request: Request) -> dict:
     signature = (
         request.headers.get("x-webhook-signature")
         or request.headers.get("x-razorpay-signature")
+        or request.headers.get("signature")
         or ""
     )
-    timestamp = request.headers.get("x-webhook-timestamp", "")
+    timestamp = request.headers.get("x-webhook-timestamp") or request.headers.get("timestamp") or ""
+
+    logger.info("Incoming webhook signature: %r, timestamp: %r", signature, timestamp)
 
     if not verify_webhook_signature(body, signature, timestamp):
         logger.warning("Payment webhook: invalid or missing signature.")

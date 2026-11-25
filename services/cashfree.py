@@ -220,31 +220,43 @@ def verify_webhook_signature(body: bytes, signature: str, timestamp: str = "") -
     Verify the webhook signature against CASHFREE_SECRET_KEY / CASHFREE_WEBHOOK_SECRET.
     Cashfree computes HMAC-SHA256 of (timestamp + raw_body) and encodes it in base64 or hex.
     """
-    secret = CASHFREE_WEBHOOK_SECRET or CASHFREE_SECRET_KEY
-    if not secret:
-        logger.error("Cashfree secret key not configured; cannot verify signature.")
+    if not signature:
+        logger.warning("Webhook verification: signature is empty or missing.")
         return False
 
-    if not signature:
+    candidate_secrets = [
+        s for s in (CASHFREE_SECRET_KEY, CASHFREE_WEBHOOK_SECRET)
+        if s and not s.startswith("your_")
+    ]
+    if not candidate_secrets:
+        logger.error("No valid Cashfree secret key configured; cannot verify signature.")
         return False
 
     # Standard Cashfree signature verification: timestamp + raw_body
+    payloads = []
     if timestamp:
-        signed_payload = timestamp.encode("utf-8") + body
-    else:
-        signed_payload = body
+        payloads.append(timestamp.encode("utf-8") + body)
+    payloads.append(body)
 
-    hmac_digest = hmac.new(
-        secret.encode("utf-8"),
-        signed_payload,
-        hashlib.sha256,
-    ).digest()
+    for secret in candidate_secrets:
+        for p in payloads:
+            hmac_digest = hmac.new(
+                secret.encode("utf-8"),
+                p,
+                hashlib.sha256,
+            ).digest()
 
-    expected_b64 = base64.b64encode(hmac_digest).decode("utf-8")
-    expected_hex = hmac.new(
-        secret.encode("utf-8"),
-        signed_payload,
-        hashlib.sha256,
-    ).hexdigest()
+            expected_b64 = base64.b64encode(hmac_digest).decode("utf-8")
+            if hmac.compare_digest(expected_b64, signature):
+                return True
 
-    return hmac.compare_digest(expected_b64, signature) or hmac.compare_digest(expected_hex, signature)
+            expected_hex = hmac.new(
+                secret.encode("utf-8"),
+                p,
+                hashlib.sha256,
+            ).hexdigest()
+            if hmac.compare_digest(expected_hex, signature):
+                return True
+
+    logger.warning("Webhook signature mismatch for received signature %r", signature)
+    return False
