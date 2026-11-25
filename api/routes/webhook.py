@@ -12,6 +12,7 @@ study materials to the buyer via Telegram.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 
@@ -26,6 +27,19 @@ from utils.sections import get_sections, section_price
 
 logger = logging.getLogger("unieval")
 router = APIRouter()
+
+
+def _safe_send_message(chat_id: int, text: str, parse_mode: str | None = "HTML", reply_markup=None):
+    """Send a Telegram message with HTML formatting and automatic plain-text fallback on error."""
+    try:
+        return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as exc:
+        logger.warning(
+            "Failed sending message with parse_mode=%s (%s), falling back to plain text",
+            parse_mode,
+            exc,
+        )
+        return bot.send_message(chat_id, text, parse_mode=None, reply_markup=reply_markup)
 
 
 @router.post("/cashfree-webhook")
@@ -73,9 +87,9 @@ async def cashfree_webhook(request: Request) -> dict:
         )
 
     # 2. Cashfree Payment Success webhook
-    elif event_type == "PAYMENT_SUCCESS_WEBHOOK":
+    elif event_type in ("PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_CHARGES_WEBHOOK"):
         payment_status = str(data.get("payment", {}).get("payment_status", "")).upper()
-        if payment_status != "SUCCESS":
+        if payment_status and payment_status != "SUCCESS":
             logger.info("Cashfree payment status '%s' ignored.", payment_status)
             return {"status": "ignored", "payment_status": payment_status}
         order = data.get("order", {})
@@ -154,30 +168,30 @@ async def cashfree_webhook(request: Request) -> dict:
                 callback_data=f"download_section:{subject_id}:{section_idx}",
             ))
             kb.add(InlineKeyboardButton("📚 Access Your All Purchased Notes Here", callback_data="view_purchased"))
+            sec_name_escaped = html.escape(sec['name'])
+            sub_name_escaped = html.escape(subject['name'])
+            msg_text = (
+                f"🎉 <b>Payment Confirmed!</b>\n\n"
+                f"Thank you for purchasing <b>{sec_name_escaped}</b> from <b>{sub_name_escaped}</b>.\n\n"
+                f"Tap below to download your section."
+            )
             await loop.run_in_executor(
                 None,
-                lambda: bot.send_message(
-                    target_chat,
-                    f"🎉 *Payment Confirmed!*\n\n"
-                    f"Thank you for purchasing *{sec['name']}* from *{subject['name']}*.\n\n"
-                    f"Tap below to download your section.",
-                    parse_mode="Markdown",
-                    reply_markup=kb,
-                ),
+                lambda: _safe_send_message(target_chat, msg_text, parse_mode="HTML", reply_markup=kb),
             )
         else:
+            sub_name_escaped = html.escape(subject['name'])
+            msg_text = (
+                f"🎉 <b>Payment Confirmed!</b>\n\nThank you for purchasing <b>{sub_name_escaped}</b>.\n\n"
+                + (
+                    "Your study materials are ready! Select a section below to download: 📚"
+                    if has_files
+                    else "Files will be available soon. Use /my_notes once ready."
+                )
+            )
             await loop.run_in_executor(
                 None,
-                lambda: bot.send_message(
-                    target_chat,
-                    f"🎉 *Payment Confirmed!*\n\nThank you for purchasing *{subject['name']}*.\n\n"
-                    + (
-                        "Your study materials are ready! Select a section below to download: 📚"
-                        if has_files
-                        else "Files will be available soon. Use /my_notes once ready."
-                    ),
-                    parse_mode="Markdown",
-                ),
+                lambda: _safe_send_message(target_chat, msg_text, parse_mode="HTML"),
             )
 
             if has_files and sections:
@@ -191,14 +205,10 @@ async def cashfree_webhook(request: Request) -> dict:
                             callback_data=f"download_section:{subject_id}:{idx}",
                         ))
                 kb.add(InlineKeyboardButton("📚 Access Your All Purchased Notes Here", callback_data="view_purchased"))
+                sec_text = "📂 <b>Choose a section to download:</b>\n<i>(or type /my_notes anytime)</i>"
                 await loop.run_in_executor(
                     None,
-                    lambda: bot.send_message(
-                        target_chat,
-                        f"📂 *Choose a section to download:*\n_(or type /mynotes anytime)_",
-                        parse_mode="Markdown",
-                        reply_markup=kb,
-                    ),
+                    lambda: _safe_send_message(target_chat, sec_text, parse_mode="HTML", reply_markup=kb),
                 )
 
         logger.info("Delivery UI sent to chat_id %s for subject '%s'.", chat_id, subject["name"])
@@ -206,15 +216,10 @@ async def cashfree_webhook(request: Request) -> dict:
     except Exception as exc:
         logger.error("CRITICAL DELIVERY FAILURE for chat_id %s: %s", chat_id, exc)
         try:
+            admin_msg = f"⚠️ DELIVERY FAILURE\n\nchat_id: {chat_id}\nSubject: {subject['name']}\nError: {exc}\n\nPlease deliver manually."
             await loop.run_in_executor(
                 None,
-                lambda: bot.send_message(
-                    ADMIN_ID,
-                    f"⚠️ *DELIVERY FAILURE*\n\n"
-                    f"chat_id: `{chat_id}`\nSubject: `{subject['name']}`\nError: `{exc}`\n\n"
-                    f"Please deliver manually.",
-                    parse_mode="Markdown",
-                ),
+                lambda: _safe_send_message(ADMIN_ID, admin_msg, parse_mode=None),
             )
         except Exception:
             pass
@@ -225,20 +230,19 @@ async def cashfree_webhook(request: Request) -> dict:
 def _notify_missing_subject(chat_id: str, subject_id: str) -> None:
     """Notify both the buyer and admin when a paid subject can't be found."""
     try:
-        bot.send_message(
+        _safe_send_message(
             int(chat_id),
             "✅ Payment received! However, there was a temporary issue retrieving your materials. "
             "Please contact support — you will NOT be charged again.",
+            parse_mode=None,
         )
     except Exception:
         pass
     try:
-        bot.send_message(
+        _safe_send_message(
             ADMIN_ID,
-            f"⚠️ *DELIVERY FAILURE*\n\n"
-            f"Payment received from chat_id `{chat_id}` but subject_id `{subject_id}` "
-            f"was not found in the database.\nPlease deliver manually.",
-            parse_mode="Markdown",
+            f"⚠️ DELIVERY FAILURE\n\nPayment received from chat_id {chat_id} but subject_id {subject_id} was not found.\nPlease deliver manually.",
+            parse_mode=None,
         )
     except Exception:
         pass
@@ -247,20 +251,19 @@ def _notify_missing_subject(chat_id: str, subject_id: str) -> None:
 def _notify_missing_section(chat_id: str, subject_name: str, section_idx: int) -> None:
     """Notify both the buyer and admin when a paid section can't be found."""
     try:
-        bot.send_message(
+        _safe_send_message(
             int(chat_id),
             "✅ Payment received! However, there was a temporary issue retrieving your section. "
             "Please contact support — you will NOT be charged again.",
+            parse_mode=None,
         )
     except Exception:
         pass
     try:
-        bot.send_message(
+        _safe_send_message(
             ADMIN_ID,
-            f"⚠️ *DELIVERY FAILURE*\n\n"
-            f"Payment received from chat_id `{chat_id}` for `{subject_name}` "
-            f"but section index `{section_idx}` was not found.\nPlease deliver manually.",
-            parse_mode="Markdown",
+            f"⚠️ DELIVERY FAILURE\n\nPayment received from chat_id {chat_id} for {subject_name} but section index {section_idx} was not found.\nPlease deliver manually.",
+            parse_mode=None,
         )
     except Exception:
         pass
