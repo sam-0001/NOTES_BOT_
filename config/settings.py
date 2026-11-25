@@ -16,7 +16,7 @@ load_dotenv()
 # ── Telegram ──────────────────────────────────────────────────────────────────
 BOT_TOKEN: str       = os.getenv("BOT_TOKEN", "")
 ADMIN_ID: int        = int(os.getenv("ADMIN_ID", "0"))
-_raw_storage = os.getenv("STORAGE_GROUP_ID", "").strip()
+_raw_storage = os.getenv("STORAGE_GROUP_ID", "").strip().strip('"').strip("'")
 STORAGE_GROUP_ID: int | str = int(_raw_storage) if _raw_storage.lstrip("-").isdigit() else _raw_storage
 
 # ── Cashfree ──────────────────────────────────────────────────────────────────
@@ -61,3 +61,4 @@ logging.basicConfig(
 
 logger = logging.getLogger("unieval")
 logger.info("ADMIN_ID loaded as: %d", ADMIN_ID)
+logger.info("STORAGE_GROUP_ID loaded as: %r (type: %s)", STORAGE_GROUP_ID, type(STORAGE_GROUP_ID).__name__)
